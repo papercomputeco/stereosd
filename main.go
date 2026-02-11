@@ -13,27 +13,15 @@
 package main
 
 import (
-	"context"
-	"log"
+	"fmt"
 	"os"
-	"os/signal"
-	"syscall"
 
-	"github.com/papercomputeco/stereosd/pkg"
+	rootcmder "github.com/papercomputeco/stereosd/cmd/root"
 )
 
 func main() {
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	log.Println("stereosd: starting StereOS daemon")
-
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
-
-	daemon := stereosd.NewDaemon()
-	if err := daemon.Run(ctx); err != nil {
-		log.Fatalf("stereosd: fatal: %v", err)
+	if err := rootcmder.NewRootCmd().Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "stereosd: %v\n", err)
 		os.Exit(1)
 	}
-
-	log.Println("stereosd: shutdown complete")
 }

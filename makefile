@@ -1,11 +1,25 @@
 # Based around the auto-documented Makefile:
 # http://marmelab.com/blog/2016/02/29/auto-documented-makefile.html
 
+VERSION_PKG := github.com/papercomputeco/stereosd/pkg/version
+GIT_COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_DATE  := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+VERSION     ?= dev
+
+LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) \
+           -X $(VERSION_PKG).GitCommit=$(GIT_COMMIT) \
+           -X $(VERSION_PKG).BuildDate=$(BUILD_DATE)
+
 .PHONY: build
 build: ## Builds artifact
 	$(call print-target)
 	@mkdir -p ./build
-	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o ./build/streosd
+	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o ./build/stereosd
+
+.PHONY: test
+test: ## Runs the test suite
+	$(call print-target)
+	go run github.com/onsi/ginkgo/v2/ginkgo -r --race ./...
 
 .PHONY: help
 .DEFAULT_GOAL := help

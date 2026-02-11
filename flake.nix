@@ -20,6 +20,9 @@
 
             # Build tools
             pkgs.gnumake
+
+            # Test tools
+            pkgs.hurl
           ];
 
           shellHook = ''

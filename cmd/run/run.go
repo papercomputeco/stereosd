@@ -19,9 +19,9 @@ import (
 const runLongDesc string = `Start the stereosd daemon.
 
 Initializes the control plane: creates runtime directories, opens the
-virtio-vsock listener for host communication, starts the Unix socket IPC
-server for agentd, and blocks until a shutdown signal (SIGINT, SIGTERM) or
-a host-initiated shutdown command is received.
+virtio-vsock listener for host communication, starts the HTTP API server,
+begins polling agentd for agent status, and blocks until a shutdown signal
+(SIGINT, SIGTERM) or a host-initiated shutdown command is received.
 
 Examples:
   stereosd run`

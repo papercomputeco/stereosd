@@ -49,7 +49,7 @@ list-mounts: ## List active mounts
 	$(HURL) $(HURL_OPTS) list-mounts.hurl
 
 .PHONY: agent-status
-agent-status: ## Report agent status
+agent-status: ## List agent statuses (polled from agentd)
 	$(HURL) $(HURL_OPTS) agent-status.hurl
 
 .PHONY: shutdown

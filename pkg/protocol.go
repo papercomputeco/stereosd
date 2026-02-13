@@ -1,5 +1,5 @@
 // protocol.go defines the JSON message protocol used for communication
-// over both the vsock channel (host <-> stereosd) and the unix socket (stereosd <-> agentd).
+// over the vsock channel (host <-> stereosd).
 //
 // All messages are newline-delimited JSON (one JSON object per line).
 // Each message has a "type" field that determines how the payload is interpreted.
@@ -39,18 +39,9 @@ const (
 	// MsgAck acknowledges a command (success or failure).
 	MsgAck MessageType = "ack"
 
-	// -- Internal IPC (unix socket) messages --------------------------------
+	// -- Health query messages -----------------------------------------------
 
-	// MsgAgentStatus is sent by agentd to report agent status changes.
-	MsgAgentStatus MessageType = "agent_status"
-
-	// MsgStopAgents is sent by stereosd to agentd during shutdown coordination.
-	MsgStopAgents MessageType = "stop_agents"
-
-	// MsgAgentsStopped is sent by agentd after all agents have stopped.
-	MsgAgentsStopped MessageType = "agents_stopped"
-
-	// MsgGetHealth is sent by agentd to request current health status.
+	// MsgGetHealth requests current health status.
 	MsgGetHealth MessageType = "get_health"
 
 	// MsgHealth is the response to a get_health request.
@@ -137,7 +128,8 @@ type AckPayload struct {
 	Error string `json:"error,omitempty"`
 }
 
-// AgentStatusPayload is the payload for MsgAgentStatus messages from agentd.
+// AgentStatusPayload represents the runtime state of a single agent harness.
+// Fields match agentd's API response from GET /v1/agents.
 type AgentStatusPayload struct {
 	// Name is the agent harness name (e.g., "claude-code", "opencode").
 	Name string `json:"name"`
@@ -145,6 +137,8 @@ type AgentStatusPayload struct {
 	Running bool `json:"running"`
 	// Session is the tmux session name, if running.
 	Session string `json:"session,omitempty"`
+	// Restarts is the number of times the agent has been restarted.
+	Restarts int `json:"restarts"`
 	// Error is set if the agent is in an error state.
 	Error string `json:"error,omitempty"`
 }
@@ -160,6 +154,4 @@ type HealthPayload struct {
 type ShutdownPayload struct {
 	// Reason describes why shutdown was requested.
 	Reason string `json:"reason,omitempty"`
-	// GracePeriodSec is how long to wait for agents to stop before forcing.
-	GracePeriodSec int `json:"grace_period_sec,omitempty"`
 }

@@ -21,6 +21,16 @@ test: ## Runs the test suite
 	$(call print-target)
 	go run github.com/onsi/ginkgo/v2/ginkgo -r --race ./...
 
+.PHONY: nix-build
+nix-build: ## Builds the Nix package for the current system
+	$(call print-target)
+	nix build --out-link ./build/result
+
+.PHONY: clean
+clean: ## Removes build artifacts
+	$(call print-target)
+	rm -rf ./build
+
 .PHONY: help
 .DEFAULT_GOAL := help
 help: ## Prints this help message

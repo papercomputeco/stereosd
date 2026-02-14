@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +30,7 @@ func TestStereosd(t *testing.T) {
 
 // mockCommander records commands instead of executing them.
 type mockCommander struct {
+	mu       sync.Mutex
 	commands [][]string
 	failOn   map[string]error
 }
@@ -40,6 +42,8 @@ func newMockCommander() *mockCommander {
 }
 
 func (m *mockCommander) Run(name string, args ...string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	cmd := append([]string{name}, args...)
 	m.commands = append(m.commands, cmd)
 	if err, ok := m.failOn[name]; ok {
@@ -49,6 +53,8 @@ func (m *mockCommander) Run(name string, args ...string) error {
 }
 
 func (m *mockCommander) Output(name string, args ...string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	cmd := append([]string{name}, args...)
 	m.commands = append(m.commands, cmd)
 	if err, ok := m.failOn[name]; ok {
@@ -58,12 +64,22 @@ func (m *mockCommander) Output(name string, args ...string) ([]byte, error) {
 }
 
 func (m *mockCommander) hasCommand(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for _, cmd := range m.commands {
 		if cmd[0] == name {
 			return true
 		}
 	}
 	return false
+}
+
+func (m *mockCommander) getCommands() [][]string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([][]string, len(m.commands))
+	copy(result, m.commands)
+	return result
 }
 
 // testListenerFactory creates a TCP listener as a vsock substitute for tests.
@@ -714,12 +730,23 @@ var _ = Describe("RuntimeDirs", func() {
 
 var _ = Describe("Daemon", func() {
 	var (
-		daemon    *stereosd.Daemon
-		tmpDir    string
-		cmd       *mockCommander
-		vsockAddr string
-		ipcSocket string
+		daemon      *stereosd.Daemon
+		tmpDir      string
+		cmd         *mockCommander
+		vsockAddrCh chan string
+		ipcSocket   string
 	)
+
+	getVsockAddr := func() string {
+		select {
+		case addr := <-vsockAddrCh:
+			// Put it back so subsequent calls still work
+			vsockAddrCh <- addr
+			return addr
+		default:
+			return ""
+		}
+	}
 
 	BeforeEach(func() {
 		var err error
@@ -728,6 +755,7 @@ var _ = Describe("Daemon", func() {
 
 		cmd = newMockCommander()
 		ipcSocket = filepath.Join(tmpDir, "stereosd.sock")
+		vsockAddrCh = make(chan string, 1)
 
 		// Track the vsock listener address
 		var vsockListener net.Listener
@@ -745,7 +773,7 @@ var _ = Describe("Daemon", func() {
 				if err != nil {
 					return nil, err
 				}
-				vsockAddr = vsockListener.Addr().String()
+				vsockAddrCh <- vsockListener.Addr().String()
 				return &testVsockListener{listener: vsockListener}, nil
 			},
 			Commander: cmd,
@@ -773,10 +801,11 @@ var _ = Describe("Daemon", func() {
 
 		// Wait for the daemon to start listening
 		Eventually(func() bool {
-			if vsockAddr == "" {
+			addr := getVsockAddr()
+			if addr == "" {
 				return false
 			}
-			conn, err := net.Dial("tcp", vsockAddr)
+			conn, err := net.Dial("tcp", addr)
 			if err != nil {
 				return false
 			}
@@ -788,7 +817,7 @@ var _ = Describe("Daemon", func() {
 		env, err := stereosd.NewEnvelope(stereosd.MsgPing, nil)
 		Expect(err).NotTo(HaveOccurred())
 
-		resp, err := sendVsockMessage(vsockAddr, env)
+		resp, err := sendVsockMessage(getVsockAddr(), env)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.Type).To(Equal(stereosd.MsgPong))
 
@@ -803,10 +832,11 @@ var _ = Describe("Daemon", func() {
 
 		// Wait for the daemon to start
 		Eventually(func() bool {
-			if vsockAddr == "" {
+			addr := getVsockAddr()
+			if addr == "" {
 				return false
 			}
-			conn, err := net.Dial("tcp", vsockAddr)
+			conn, err := net.Dial("tcp", addr)
 			if err != nil {
 				return false
 			}
@@ -821,7 +851,7 @@ var _ = Describe("Daemon", func() {
 		})
 		Expect(err).NotTo(HaveOccurred())
 
-		resp, err := sendVsockMessage(vsockAddr, env)
+		resp, err := sendVsockMessage(getVsockAddr(), env)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.Type).To(Equal(stereosd.MsgAck))
 
@@ -845,10 +875,11 @@ var _ = Describe("Daemon", func() {
 		go daemon.Run(ctx)
 
 		Eventually(func() bool {
-			if vsockAddr == "" {
+			addr := getVsockAddr()
+			if addr == "" {
 				return false
 			}
-			conn, err := net.Dial("tcp", vsockAddr)
+			conn, err := net.Dial("tcp", addr)
 			if err != nil {
 				return false
 			}
@@ -864,7 +895,7 @@ var _ = Describe("Daemon", func() {
 		})
 		Expect(err).NotTo(HaveOccurred())
 
-		resp, err := sendVsockMessage(vsockAddr, env)
+		resp, err := sendVsockMessage(getVsockAddr(), env)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.Type).To(Equal(stereosd.MsgAck))
 
@@ -899,29 +930,36 @@ var _ = Describe("Daemon", func() {
 		cancel()
 	})
 
-	It("should update lifecycle state when agentd reports status", func() {
+	It("should serve agent statuses via GET /v1/agents", func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
 		go daemon.Run(ctx)
 
+		// Wait for the IPC socket to be available
 		Eventually(func() bool {
 			_, err := os.Stat(ipcSocket)
 			return err == nil
 		}, 2*time.Second, 50*time.Millisecond).Should(BeTrue())
 
-		// Report agent status via HTTP API
-		result, status, err := ipcPost(ipcSocket, "/v1/agents/status", &stereosd.AgentStatusPayload{
-			Name:    "opencode",
-			Running: true,
-			Session: "opencode-main",
+		// Manually update lifecycle with agent statuses (simulating what the poller does)
+		daemon.Lifecycle().ReplaceAgentStatuses([]stereosd.AgentStatusPayload{
+			{Name: "opencode", Running: true, Session: "opencode-main", Restarts: 0},
 		})
+
+		// Fetch agents via the HTTP API
+		result, status, err := ipcGet(ipcSocket, "/v1/agents")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(status).To(Equal(http.StatusOK))
-		Expect(result["status"]).To(Equal("ok"))
 
-		// Check that lifecycle transitioned to healthy
-		Expect(daemon.Lifecycle().State()).To(Equal(stereosd.StateHealthy))
+		agents, ok := result["agents"].([]any)
+		Expect(ok).To(BeTrue())
+		Expect(agents).To(HaveLen(1))
+
+		agent := agents[0].(map[string]any)
+		Expect(agent["name"]).To(Equal("opencode"))
+		Expect(agent["running"]).To(BeTrue())
+		Expect(agent["session"]).To(Equal("opencode-main"))
 
 		cancel()
 	})
@@ -933,10 +971,11 @@ var _ = Describe("Daemon", func() {
 		go daemon.Run(ctx)
 
 		Eventually(func() bool {
-			if vsockAddr == "" {
+			addr := getVsockAddr()
+			if addr == "" {
 				return false
 			}
-			conn, err := net.Dial("tcp", vsockAddr)
+			conn, err := net.Dial("tcp", addr)
 			if err != nil {
 				return false
 			}
@@ -945,12 +984,11 @@ var _ = Describe("Daemon", func() {
 		}, 2*time.Second, 50*time.Millisecond).Should(BeTrue())
 
 		env, err := stereosd.NewEnvelope(stereosd.MsgShutdown, &stereosd.ShutdownPayload{
-			Reason:         "test shutdown",
-			GracePeriodSec: 1,
+			Reason: "test shutdown",
 		})
 		Expect(err).NotTo(HaveOccurred())
 
-		resp, err := sendVsockMessage(vsockAddr, env)
+		resp, err := sendVsockMessage(getVsockAddr(), env)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.Type).To(Equal(stereosd.MsgAck))
 
@@ -992,10 +1030,11 @@ var _ = Describe("Daemon", func() {
 		go daemon.Run(ctx)
 
 		Eventually(func() bool {
-			if vsockAddr == "" {
+			addr := getVsockAddr()
+			if addr == "" {
 				return false
 			}
-			conn, err := net.Dial("tcp", vsockAddr)
+			conn, err := net.Dial("tcp", addr)
 			if err != nil {
 				return false
 			}
@@ -1004,7 +1043,7 @@ var _ = Describe("Daemon", func() {
 		}, 2*time.Second, 50*time.Millisecond).Should(BeTrue())
 
 		env := &stereosd.Envelope{Type: "unknown_type"}
-		resp, err := sendVsockMessage(vsockAddr, env)
+		resp, err := sendVsockMessage(getVsockAddr(), env)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.Type).To(Equal(stereosd.MsgAck))
 
@@ -1063,6 +1102,241 @@ func (m *mockVsockHandler) HandleVsockMessage(ctx context.Context, env *stereosd
 }
 
 // ============================================================================
+// AgentdClient tests
+// ============================================================================
+
+var _ = Describe("AgentdClient", func() {
+	var (
+		agentdSocket string
+		agentdServer *http.Server
+		agentdLn     net.Listener
+		tmpDir       string
+	)
+
+	BeforeEach(func() {
+		var err error
+		tmpDir, err = os.MkdirTemp("", "stereos-agentd-client-test-*")
+		Expect(err).NotTo(HaveOccurred())
+
+		agentdSocket = filepath.Join(tmpDir, "agentd.sock")
+	})
+
+	AfterEach(func() {
+		if agentdServer != nil {
+			agentdServer.Close()
+		}
+		if agentdLn != nil {
+			agentdLn.Close()
+		}
+		os.RemoveAll(tmpDir)
+	})
+
+	startAgentdMock := func(healthHandler, agentsHandler http.HandlerFunc) {
+		mux := http.NewServeMux()
+		if healthHandler != nil {
+			mux.HandleFunc("GET /v1/health", healthHandler)
+		}
+		if agentsHandler != nil {
+			mux.HandleFunc("GET /v1/agents", agentsHandler)
+		}
+
+		var err error
+		agentdLn, err = net.Listen("unix", agentdSocket)
+		Expect(err).NotTo(HaveOccurred())
+
+		agentdServer = &http.Server{Handler: mux}
+		go agentdServer.Serve(agentdLn)
+	}
+
+	It("should fetch health from agentd", func() {
+		startAgentdMock(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]any{
+				"state":          "running",
+				"uptime_seconds": 42,
+			})
+		}, nil)
+
+		client := stereosd.NewAgentdClient(agentdSocket)
+		health, err := client.Health(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(health.State).To(Equal("running"))
+		Expect(health.Uptime).To(Equal(int64(42)))
+	})
+
+	It("should fetch agents from agentd", func() {
+		startAgentdMock(nil, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode([]stereosd.AgentStatusPayload{
+				{Name: "claude-code", Running: true, Session: "claude-main", Restarts: 2},
+				{Name: "opencode", Running: false, Error: "crashed", Restarts: 1},
+			})
+		})
+
+		client := stereosd.NewAgentdClient(agentdSocket)
+		agents, err := client.Agents(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(agents).To(HaveLen(2))
+		Expect(agents[0].Name).To(Equal("claude-code"))
+		Expect(agents[0].Running).To(BeTrue())
+		Expect(agents[0].Restarts).To(Equal(2))
+		Expect(agents[1].Name).To(Equal("opencode"))
+		Expect(agents[1].Running).To(BeFalse())
+		Expect(agents[1].Error).To(Equal("crashed"))
+	})
+
+	It("should return an error when agentd is not reachable", func() {
+		// No mock server started — socket does not exist
+		client := stereosd.NewAgentdClient(filepath.Join(tmpDir, "nonexistent.sock"))
+		_, err := client.Agents(context.Background())
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("should return the socket path", func() {
+		client := stereosd.NewAgentdClient(agentdSocket)
+		Expect(client.SocketPath()).To(Equal(agentdSocket))
+	})
+})
+
+// ============================================================================
+// AgentdPoller tests
+// ============================================================================
+
+var _ = Describe("AgentdPoller", func() {
+	var (
+		agentdSocket string
+		agentdServer *http.Server
+		agentdLn     net.Listener
+		tmpDir       string
+	)
+
+	BeforeEach(func() {
+		var err error
+		tmpDir, err = os.MkdirTemp("", "stereos-poller-test-*")
+		Expect(err).NotTo(HaveOccurred())
+
+		agentdSocket = filepath.Join(tmpDir, "agentd.sock")
+	})
+
+	AfterEach(func() {
+		if agentdServer != nil {
+			agentdServer.Close()
+		}
+		if agentdLn != nil {
+			agentdLn.Close()
+		}
+		os.RemoveAll(tmpDir)
+	})
+
+	It("should poll agentd and update lifecycle agent statuses", func() {
+		mux := http.NewServeMux()
+		mux.HandleFunc("GET /v1/agents", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode([]stereosd.AgentStatusPayload{
+				{Name: "opencode", Running: true, Session: "opencode-main"},
+			})
+		})
+
+		var err error
+		agentdLn, err = net.Listen("unix", agentdSocket)
+		Expect(err).NotTo(HaveOccurred())
+		agentdServer = &http.Server{Handler: mux}
+		go agentdServer.Serve(agentdLn)
+
+		lifecycle := stereosd.NewLifecycleManager()
+		lifecycle.Transition(stereosd.StateReady, "ready")
+
+		client := stereosd.NewAgentdClient(agentdSocket)
+		poller := stereosd.NewAgentdPoller(client, lifecycle, 100*time.Millisecond)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		go poller.Run(ctx)
+
+		// The poller should update the lifecycle with agent statuses
+		Eventually(func() []stereosd.AgentStatusPayload {
+			return lifecycle.Health().Agents
+		}, 2*time.Second, 50*time.Millisecond).Should(HaveLen(1))
+
+		health := lifecycle.Health()
+		Expect(health.Agents[0].Name).To(Equal("opencode"))
+		Expect(health.Agents[0].Running).To(BeTrue())
+
+		// Should transition to healthy when agents are running
+		Expect(lifecycle.State()).To(Equal(stereosd.StateHealthy))
+
+		cancel()
+	})
+
+	It("should handle agentd being unavailable gracefully", func() {
+		// No mock server — poller should log and continue
+		lifecycle := stereosd.NewLifecycleManager()
+
+		client := stereosd.NewAgentdClient(filepath.Join(tmpDir, "nonexistent.sock"))
+		poller := stereosd.NewAgentdPoller(client, lifecycle, 100*time.Millisecond)
+
+		ctx, cancel := context.WithCancel(context.Background())
+
+		go poller.Run(ctx)
+
+		// Give the poller time to tick a few times
+		time.Sleep(300 * time.Millisecond)
+
+		// Lifecycle should still be booting (no crash)
+		Expect(lifecycle.State()).To(Equal(stereosd.StateBooting))
+
+		cancel()
+	})
+})
+
+// ============================================================================
+// LifecycleManager ReplaceAgentStatuses tests
+// ============================================================================
+
+var _ = Describe("LifecycleManager ReplaceAgentStatuses", func() {
+	It("should replace all agent statuses atomically", func() {
+		lm := stereosd.NewLifecycleManager()
+
+		// Add initial agents via UpdateAgentStatus
+		lm.UpdateAgentStatus(stereosd.AgentStatusPayload{
+			Name:    "old-agent",
+			Running: true,
+		})
+		Expect(lm.Health().Agents).To(HaveLen(1))
+
+		// Replace with a new set
+		lm.ReplaceAgentStatuses([]stereosd.AgentStatusPayload{
+			{Name: "claude-code", Running: true, Session: "claude-main", Restarts: 1},
+			{Name: "opencode", Running: false, Error: "stopped"},
+		})
+
+		health := lm.Health()
+		Expect(health.Agents).To(HaveLen(2))
+		Expect(health.Agents[0].Name).To(Equal("claude-code"))
+		Expect(health.Agents[0].Restarts).To(Equal(1))
+		Expect(health.Agents[1].Name).To(Equal("opencode"))
+		Expect(health.Agents[1].Error).To(Equal("stopped"))
+	})
+
+	It("should handle empty replacement", func() {
+		lm := stereosd.NewLifecycleManager()
+
+		lm.UpdateAgentStatus(stereosd.AgentStatusPayload{
+			Name:    "agent",
+			Running: true,
+		})
+
+		lm.ReplaceAgentStatuses([]stereosd.AgentStatusPayload{})
+
+		Expect(lm.Health().Agents).To(BeEmpty())
+	})
+})
+
+// ============================================================================
 // ShutdownCoordinator tests
 // ============================================================================
 
@@ -1072,24 +1346,28 @@ var _ = Describe("ShutdownCoordinator", func() {
 		lifecycle := stereosd.NewLifecycleManager()
 		mounts := stereosd.NewMountManager(cmd)
 
-		socketPath, err := os.CreateTemp("", "stereos-ipc-test-*.sock")
-		Expect(err).NotTo(HaveOccurred())
-		socketPath.Close()
-		os.Remove(socketPath.Name())
-		defer os.Remove(socketPath.Name())
-
-		ipc := stereosd.NewIPCServer(socketPath.Name())
-		sc := stereosd.NewShutdownCoordinator(ipc, mounts, lifecycle, cmd)
+		sc := stereosd.NewShutdownCoordinator(mounts, lifecycle, cmd)
 
 		ctx := context.Background()
-		err = sc.Execute(ctx, &stereosd.ShutdownPayload{
-			Reason:         "test",
-			GracePeriodSec: 1,
+		err := sc.Execute(ctx, &stereosd.ShutdownPayload{
+			Reason: "test",
 		})
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(cmd.hasCommand("sync")).To(BeTrue())
 		Expect(cmd.hasCommand("systemctl")).To(BeTrue())
+		Expect(cmd.hasCommand("sync")).To(BeTrue())
 		Expect(lifecycle.State()).To(Equal(stereosd.StateShutdown))
+
+		// Verify systemctl poweroff is the only systemctl call —
+		// agentd is an independent systemd service and will receive
+		// SIGTERM from systemd during poweroff.
+		var systemctlCmds [][]string
+		for _, c := range cmd.getCommands() {
+			if c[0] == "systemctl" {
+				systemctlCmds = append(systemctlCmds, c)
+			}
+		}
+		Expect(systemctlCmds).To(HaveLen(1))
+		Expect(systemctlCmds[0][1]).To(Equal("poweroff"))
 	})
 })

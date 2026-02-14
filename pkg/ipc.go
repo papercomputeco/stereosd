@@ -1,5 +1,5 @@
 // ipc.go implements the HTTP API server on the unix socket for
-// stereosd <-> agentd (and operator tooling) communication.
+// stereosd communication with operator tooling and the host.
 //
 // The API is a simple JSON-over-HTTP interface on /run/stereos/stereosd.sock:
 //
@@ -11,11 +11,11 @@
 //	POST /v1/mounts              — mount a shared directory
 //	GET  /v1/mounts              — list active mounts
 //	POST /v1/shutdown             — initiate graceful shutdown
-//	POST /v1/agents/status        — report agent status (from agentd)
-//	POST /v1/agents/stopped       — confirm agents stopped (from agentd)
+//	GET  /v1/agents               — list agent statuses (polled from agentd)
 //
-// This replaces the raw newline-delimited JSON protocol on the IPC socket,
-// making it testable with standard HTTP tools (curl, hurl).
+// Agent status is obtained by polling agentd's HTTP API on a recurring
+// tick, rather than receiving pushed updates. The GET /v1/agents endpoint
+// returns the latest cached agent statuses from the lifecycle manager.
 package stereosd
 
 import (
@@ -102,21 +102,6 @@ func (s *IPCServer) Close() error {
 	return nil
 }
 
-// IsAgentdConnected returns true. With the HTTP API, agentd connectivity
-// is determined per-request rather than by persistent connection.
-// For shutdown coordination, we optimistically attempt notification.
-func (s *IPCServer) IsAgentdConnected() bool {
-	return true
-}
-
-// Send sends a message to agentd. In the HTTP model, this is a no-op
-// because the shutdown coordinator now uses systemd dependency ordering
-// (agentd is stopped before stereosd via Requires=stereosd.service).
-func (s *IPCServer) Send(env *Envelope) error {
-	log.Printf("ipc: send %s (agentd will be notified via systemd)", env.Type)
-	return nil
-}
-
 // registerRoutes sets up the HTTP routes.
 func (s *IPCServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/ping", s.handlePing)
@@ -127,8 +112,7 @@ func (s *IPCServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/mounts", s.handleMount)
 	mux.HandleFunc("GET /v1/mounts", s.handleListMounts)
 	mux.HandleFunc("POST /v1/shutdown", s.handleShutdown)
-	mux.HandleFunc("POST /v1/agents/status", s.handleAgentStatus)
-	mux.HandleFunc("POST /v1/agents/stopped", s.handleAgentsStopped)
+	mux.HandleFunc("GET /v1/agents", s.handleListAgents)
 }
 
 // -- Handlers ---------------------------------------------------------------
@@ -223,26 +207,13 @@ func (s *IPCServer) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "shutting_down"})
 }
 
-func (s *IPCServer) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
-	var payload AgentStatusPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON: %v", err)
-		return
+func (s *IPCServer) handleListAgents(w http.ResponseWriter, r *http.Request) {
+	health := s.daemon.lifecycle.Health()
+	agents := health.Agents
+	if agents == nil {
+		agents = []AgentStatusPayload{}
 	}
-
-	s.daemon.lifecycle.UpdateAgentStatus(payload)
-
-	if s.daemon.lifecycle.State() == StateReady {
-		s.daemon.lifecycle.Transition(StateHealthy, "agents running")
-	}
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-func (s *IPCServer) handleAgentsStopped(w http.ResponseWriter, r *http.Request) {
-	log.Println("stereosd: agentd confirmed all agents stopped")
-	s.daemon.shutdown.NotifyAgentsStopped()
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]any{"agents": agents})
 }
 
 // -- JSON response helpers --------------------------------------------------

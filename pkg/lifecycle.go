@@ -76,7 +76,6 @@ func (lm *LifecycleManager) Uptime() time.Duration {
 }
 
 // UpdateAgentStatus records the status of an agent harness.
-// This is called when agentd sends agent_status messages.
 func (lm *LifecycleManager) UpdateAgentStatus(status AgentStatusPayload) {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
@@ -89,6 +88,17 @@ func (lm *LifecycleManager) UpdateAgentStatus(status AgentStatusPayload) {
 		}
 	}
 	lm.agents = append(lm.agents, status)
+}
+
+// ReplaceAgentStatuses atomically replaces the full set of agent statuses.
+// This is used by the agentd poller to replace the agent list with the
+// latest state pulled from agentd's API.
+func (lm *LifecycleManager) ReplaceAgentStatuses(agents []AgentStatusPayload) {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+
+	lm.agents = make([]AgentStatusPayload, len(agents))
+	copy(lm.agents, agents)
 }
 
 // Health returns the current health payload for reporting.

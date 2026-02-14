@@ -6,10 +6,17 @@
 //   - Shared directory mounting (virtio-fs / 9p)
 //   - Secret injection to tmpfs-backed files
 //   - Graceful shutdown coordination
-//   - Unix socket IPC for agentd communication
+//   - HTTP API for operator tooling and status queries
+//   - Polling agentd's HTTP API for agent status
 //
 // Communication channel: virtio-vsock (AF_VSOCK) keeps the control plane
 // independent of network configuration (critical when network.mode = "none").
+//
+// agentd integration: agentd operates on a reconciliation loop, reading
+// configuration from /etc/stereos/jcard.toml and secrets from
+// /run/stereos/secrets/ on a recurring tick. stereosd polls agentd's HTTP
+// API (served on a Unix socket) to fetch agent status rather than relying
+// on push-based updates.
 package stereosd
 
 import (
@@ -17,6 +24,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 )
 
 const (
@@ -31,8 +39,7 @@ const (
 	// secrets for agentd to consume. Never written to persistent disk.
 	SecretDir = "/run/stereos/secrets"
 
-	// SocketPath is the unix socket path that agentd uses to communicate
-	// with stereosd.
+	// SocketPath is the unix socket path for the stereosd HTTP API.
 	SocketPath = "/run/stereos/stereosd.sock"
 )
 
@@ -45,8 +52,16 @@ type Config struct {
 	// VsockPort is the port to listen on for host communication.
 	VsockPort uint32
 
-	// SocketPath is the unix socket path for agentd IPC.
+	// SocketPath is the unix socket path for the stereosd HTTP API.
 	SocketPath string
+
+	// AgentdSocketPath is the unix socket path for agentd's HTTP API.
+	// stereosd polls this socket to fetch agent status.
+	AgentdSocketPath string
+
+	// PollInterval is how often stereosd polls agentd for status.
+	// If zero, DefaultPollInterval is used.
+	PollInterval time.Duration
 
 	// RuntimeDirs defines the runtime directory paths.
 	RuntimeDirs RuntimeDirs
@@ -62,9 +77,11 @@ type Config struct {
 // DefaultConfig returns the default daemon configuration.
 func DefaultConfig() Config {
 	return Config{
-		VsockPort:   VsockPort,
-		SocketPath:  SocketPath,
-		RuntimeDirs: DefaultRuntimeDirs(),
+		VsockPort:        VsockPort,
+		SocketPath:       SocketPath,
+		AgentdSocketPath: AgentdSocketPath,
+		PollInterval:     DefaultPollInterval,
+		RuntimeDirs:      DefaultRuntimeDirs(),
 	}
 }
 
@@ -75,6 +92,7 @@ type Daemon struct {
 	secrets   *SecretManager
 	mounts    *MountManager
 	ipc       *IPCServer
+	agentd    *AgentdClient
 	shutdown  *ShutdownCoordinator
 
 	// shutdownRequested is closed when a shutdown command is received,
@@ -95,6 +113,13 @@ func NewDaemonWithConfig(config Config) *Daemon {
 		commander = ExecCommander{}
 	}
 
+	if config.AgentdSocketPath == "" {
+		config.AgentdSocketPath = AgentdSocketPath
+	}
+	if config.PollInterval == 0 {
+		config.PollInterval = DefaultPollInterval
+	}
+
 	lifecycle := NewLifecycleManager()
 	secrets := NewSecretManager(config.RuntimeDirs.Secrets)
 	mounts := NewMountManager(commander)
@@ -104,15 +129,16 @@ func NewDaemonWithConfig(config Config) *Daemon {
 		lifecycle:         lifecycle,
 		secrets:           secrets,
 		mounts:            mounts,
+		agentd:            NewAgentdClient(config.AgentdSocketPath),
 		shutdownRequested: make(chan struct{}),
 	}
 
-	// IPC server (stereosd -> agentd communication via HTTP API)
+	// IPC server (stereosd HTTP API)
 	d.ipc = NewIPCServer(config.SocketPath)
 	d.ipc.SetDaemon(d)
 
 	// Shutdown coordinator
-	d.shutdown = NewShutdownCoordinator(d.ipc, mounts, lifecycle, commander)
+	d.shutdown = NewShutdownCoordinator(mounts, lifecycle, commander)
 
 	return d
 }
@@ -136,8 +162,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	vsockServer := NewVsockServer(vsockListener, d)
 
-	// Step 3: Start the IPC unix socket
-	// Both servers run in background goroutines
+	// Step 3: Start the HTTP API and vsock servers in background goroutines
 	errCh := make(chan error, 2)
 
 	go func() {
@@ -152,11 +177,15 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 	}()
 
-	// Step 4: Report readiness
+	// Step 4: Start the agentd status poller
+	poller := NewAgentdPoller(d.agentd, d.lifecycle, d.config.PollInterval)
+	go poller.Run(ctx)
+
+	// Step 5: Report readiness
 	d.lifecycle.Transition(StateReady, "all subsystems started")
 	log.Println("stereosd: ready")
 
-	// Step 5: Wait for shutdown signal or context cancellation
+	// Step 6: Wait for shutdown signal or context cancellation
 	select {
 	case <-ctx.Done():
 		log.Println("stereosd: context cancelled, shutting down")
@@ -271,4 +300,9 @@ func (d *Daemon) Secrets() *SecretManager {
 // Mounts returns the mount manager for external access.
 func (d *Daemon) Mounts() *MountManager {
 	return d.mounts
+}
+
+// Agentd returns the agentd client for external access.
+func (d *Daemon) Agentd() *AgentdClient {
+	return d.agentd
 }

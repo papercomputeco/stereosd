@@ -19,7 +19,8 @@ It runs inside every StereOS instance and provides:
 - Shared directory mounting (virtio-fs / 9p)
 - Secret injection to tmpfs-backed files
 - Graceful shutdown coordination
-- Unix socket IPC for agentd communication`
+- HTTP API for operator tooling and status queries
+- Polling agentd's HTTP API for agent status`
 
 const rootShortDesc string = "StereOS daemon control plane"
 

@@ -1,14 +1,8 @@
-# Agent status — report an agent's status to stereosd (from agentd).
+# Agent status — list agents polled from agentd.
 
-POST http://localhost/v1/agents/status
-Content-Type: application/json
-{
-  "name": "opencode",
-  "running": true,
-  "session": "opencode-main"
-}
+GET http://localhost/v1/agents
 
 HTTP 200
 [Asserts]
 header "Content-Type" contains "application/json"
-jsonpath "$.status" == "ok"
+jsonpath "$.agents" isCollection

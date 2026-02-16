@@ -28,6 +28,10 @@ const (
 	// MsgShutdown requests a graceful shutdown of the StereOS instance.
 	MsgShutdown MessageType = "shutdown"
 
+	// MsgSetConfig delivers the jcard.toml configuration to the guest.
+	// stereosd writes it to /etc/stereos/jcard.toml for agentd to consume.
+	MsgSetConfig MessageType = "set_config"
+
 	// -- Guest -> Host (vsock) messages -------------------------------------
 
 	// MsgPong is the response to a ping.
@@ -154,4 +158,10 @@ type HealthPayload struct {
 type ShutdownPayload struct {
 	// Reason describes why shutdown was requested.
 	Reason string `json:"reason,omitempty"`
+}
+
+// ConfigPayload is the payload for MsgSetConfig messages.
+type ConfigPayload struct {
+	// Content is the raw jcard.toml content to write to /etc/stereos/jcard.toml.
+	Content string `json:"content"`
 }

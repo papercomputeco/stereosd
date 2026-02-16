@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 )
@@ -38,6 +39,13 @@ const (
 	// SecretDir is the tmpfs-backed directory where stereosd writes injected
 	// secrets for agentd to consume. Never written to persistent disk.
 	SecretDir = "/run/stereos/secrets"
+
+	// ConfigDir is the directory where stereosd writes configuration files
+	// (e.g., jcard.toml) for agentd to consume.
+	ConfigDir = "/etc/stereos"
+
+	// ConfigPath is the path where the jcard.toml config is written.
+	ConfigPath = "/etc/stereos/jcard.toml"
 
 	// SocketPath is the unix socket path for the stereosd HTTP API.
 	SocketPath = "/run/stereos/stereosd.sock"
@@ -259,6 +267,24 @@ func (d *Daemon) HandleVsockMessage(ctx context.Context, env *Envelope) (*Envelo
 	case MsgGetHealth:
 		health := d.lifecycle.Health()
 		return NewEnvelope(MsgHealth, &health)
+
+	case MsgSetConfig:
+		var payload ConfigPayload
+		if err := env.DecodePayload(&payload); err != nil {
+			return nil, fmt.Errorf("decode config payload: %w", err)
+		}
+		if err := os.WriteFile(ConfigPath, []byte(payload.Content), 0644); err != nil {
+			return NewEnvelope(MsgAck, &AckPayload{
+				ReplyTo: MsgSetConfig,
+				OK:      false,
+				Error:   err.Error(),
+			})
+		}
+		log.Printf("config: wrote %s (%d bytes)", ConfigPath, len(payload.Content))
+		return NewEnvelope(MsgAck, &AckPayload{
+			ReplyTo: MsgSetConfig,
+			OK:      true,
+		})
 
 	case MsgInjectSecret:
 		var payload SecretPayload

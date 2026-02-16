@@ -690,6 +690,7 @@ var _ = Describe("RuntimeDirs", func() {
 		dirs := stereosd.RuntimeDirs{
 			Base:    filepath.Join(tmpDir, "stereos"),
 			Secrets: filepath.Join(tmpDir, "stereos", "secrets"),
+			Config:  filepath.Join(tmpDir, "etc", "stereos"),
 		}
 
 		Expect(stereosd.EnsureRuntimeDirs(dirs)).To(Succeed())
@@ -701,6 +702,10 @@ var _ = Describe("RuntimeDirs", func() {
 		info, err = os.Stat(dirs.Secrets)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(info.Mode().Perm()).To(Equal(os.FileMode(0700)))
+
+		info, err = os.Stat(dirs.Config)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(info.Mode().Perm()).To(Equal(os.FileMode(0755)))
 	})
 
 	It("should be idempotent", func() {
@@ -711,6 +716,7 @@ var _ = Describe("RuntimeDirs", func() {
 		dirs := stereosd.RuntimeDirs{
 			Base:    filepath.Join(tmpDir, "stereos"),
 			Secrets: filepath.Join(tmpDir, "stereos", "secrets"),
+			Config:  filepath.Join(tmpDir, "etc", "stereos"),
 		}
 
 		Expect(stereosd.EnsureRuntimeDirs(dirs)).To(Succeed())
@@ -721,6 +727,7 @@ var _ = Describe("RuntimeDirs", func() {
 		dirs := stereosd.DefaultRuntimeDirs()
 		Expect(dirs.Base).To(Equal("/run/stereos"))
 		Expect(dirs.Secrets).To(Equal("/run/stereos/secrets"))
+		Expect(dirs.Config).To(Equal("/etc/stereos"))
 	})
 })
 
@@ -766,6 +773,7 @@ var _ = Describe("Daemon", func() {
 			RuntimeDirs: stereosd.RuntimeDirs{
 				Base:    filepath.Join(tmpDir, "stereos"),
 				Secrets: filepath.Join(tmpDir, "stereos", "secrets"),
+				Config:  filepath.Join(tmpDir, "etc", "stereos"),
 			},
 			ListenerFactory: func(port uint32) (stereosd.VsockListener, error) {
 				var err error

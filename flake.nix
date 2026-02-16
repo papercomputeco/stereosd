@@ -37,10 +37,20 @@
               default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
               description = "The stereosd package to use";
             };
+            listenMode = lib.mkOption {
+              type = lib.types.enum [ "auto" "vsock" "tcp" ];
+              default = "auto";
+              description = ''
+                Control plane listener mode.
+                "vsock" - AF_VSOCK only (Linux/KVM with vhost-vsock).
+                "tcp"   - TCP only (macOS/HVF, QEMU user-mode networking).
+                "auto"  - try vsock first, fall back to TCP.
+              '';
+            };
             extraArgs = lib.mkOption {
               type = lib.types.listOf lib.types.str;
               default = [];
-              description = "Additional command-line arguments";
+              description = "Additional command-line arguments passed after 'run'.";
             };
           };
 
@@ -48,9 +58,9 @@
             systemd.services.stereosd = {
               description = "StereOS Control Plane Daemon";
               wantedBy = [ "multi-user.target" ];
-              after = [ "network.target" ];
+              after = [ "network.target" "systemd-tmpfiles-setup.service" ];
               serviceConfig = {
-                ExecStart = "${cfg.package}/bin/stereosd ${lib.escapeShellArgs cfg.extraArgs}";
+                ExecStart = "${cfg.package}/bin/stereosd run --listen-mode ${cfg.listenMode} ${lib.escapeShellArgs cfg.extraArgs}";
                 Restart = "always";
                 DynamicUser = true;
                 StateDirectory = "stereosd";

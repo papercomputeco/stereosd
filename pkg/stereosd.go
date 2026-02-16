@@ -52,6 +52,11 @@ type Config struct {
 	// VsockPort is the port to listen on for host communication.
 	VsockPort uint32
 
+	// ListenMode controls the control plane listener type.
+	// Valid values: "vsock" (AF_VSOCK only), "tcp" (TCP only),
+	// "auto" (try vsock, fall back to tcp). Default: "auto".
+	ListenMode string
+
 	// SocketPath is the unix socket path for the stereosd HTTP API.
 	SocketPath string
 
@@ -78,6 +83,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		VsockPort:        VsockPort,
+		ListenMode:       "auto",
 		SocketPath:       SocketPath,
 		AgentdSocketPath: AgentdSocketPath,
 		PollInterval:     DefaultPollInterval,
@@ -203,13 +209,27 @@ func (d *Daemon) Run(ctx context.Context) error {
 	return nil
 }
 
-// createVsockListener creates the vsock listener using the configured factory
-// or falls back to the real vsock implementation.
+// createVsockListener creates the control plane listener based on the
+// configured listen mode. When ListenerFactory is set (tests), it takes
+// precedence over the listen mode.
 func (d *Daemon) createVsockListener() (VsockListener, error) {
 	if d.config.ListenerFactory != nil {
 		return d.config.ListenerFactory(d.config.VsockPort)
 	}
-	return NewRealVsockListener(d.config.VsockPort)
+
+	switch d.config.ListenMode {
+	case "tcp":
+		return NewTCPListener(d.config.VsockPort)
+	case "vsock":
+		return NewRealVsockListener(d.config.VsockPort)
+	default: // "auto"
+		l, err := NewRealVsockListener(d.config.VsockPort)
+		if err != nil {
+			log.Printf("vsock: AF_VSOCK unavailable (%v), falling back to TCP", err)
+			return NewTCPListener(d.config.VsockPort)
+		}
+		return l, nil
+	}
 }
 
 // requestShutdown signals that a shutdown has been requested.

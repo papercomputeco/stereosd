@@ -6,6 +6,7 @@ package stereosd
 import (
 	"fmt"
 	"net"
+	"os"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -50,6 +51,31 @@ func NewRealVsockListener(port uint32) (VsockListener, error) {
 	}
 
 	return &vsockListener{fd: fd, port: port}, nil
+}
+
+// VsockTransportAvailable checks whether a real vsock transport is attached
+// by querying the local CID via /dev/vsock. AF_VSOCK sockets can be created
+// and bound even without a transport (e.g., when the kernel module is loaded
+// but no vhost-vsock-pci device is present from the hypervisor). Without a
+// transport, the listener will never receive connections.
+//
+// Returns true if a vsock transport is attached (local CID is a real guest
+// CID, not VMADDR_CID_ANY).
+func VsockTransportAvailable() bool {
+	f, err := os.Open("/dev/vsock")
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	// IOCTL_VM_SOCKETS_GET_LOCAL_CID returns the guest's CID.
+	// If no transport is attached, the CID will be VMADDR_CID_ANY (0xFFFFFFFF).
+	cid, err := unix.IoctlGetUint32(int(f.Fd()), unix.IOCTL_VM_SOCKETS_GET_LOCAL_CID)
+	if err != nil {
+		return false
+	}
+
+	return cid != unix.VMADDR_CID_ANY
 }
 
 func (l *vsockListener) Accept() (net.Conn, error) {

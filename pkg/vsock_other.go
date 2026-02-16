@@ -14,3 +14,8 @@ import "fmt"
 func NewRealVsockListener(port uint32) (VsockListener, error) {
 	return nil, fmt.Errorf("AF_VSOCK not available on this platform")
 }
+
+// VsockTransportAvailable on non-Linux platforms always returns false.
+func VsockTransportAvailable() bool {
+	return false
+}

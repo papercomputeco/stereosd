@@ -223,6 +223,14 @@ func (d *Daemon) createVsockListener() (VsockListener, error) {
 	case "vsock":
 		return NewRealVsockListener(d.config.VsockPort)
 	default: // "auto"
+		// Check if a vsock transport is actually attached (e.g., vhost-vsock-pci
+		// from the hypervisor). AF_VSOCK sockets can be created even without a
+		// transport (the kernel module is loaded), but the listener will never
+		// receive connections without a device from the host side.
+		if !VsockTransportAvailable() {
+			log.Printf("vsock: no vsock transport detected, using TCP listener")
+			return NewTCPListener(d.config.VsockPort)
+		}
 		l, err := NewRealVsockListener(d.config.VsockPort)
 		if err != nil {
 			log.Printf("vsock: AF_VSOCK unavailable (%v), falling back to TCP", err)

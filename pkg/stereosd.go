@@ -256,6 +256,10 @@ func (d *Daemon) HandleVsockMessage(ctx context.Context, env *Envelope) (*Envelo
 	case MsgPing:
 		return NewEnvelope(MsgPong, nil)
 
+	case MsgGetHealth:
+		health := d.lifecycle.Health()
+		return NewEnvelope(MsgHealth, &health)
+
 	case MsgInjectSecret:
 		var payload SecretPayload
 		if err := env.DecodePayload(&payload); err != nil {

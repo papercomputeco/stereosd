@@ -5,6 +5,7 @@ package stereosd
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"syscall"
@@ -59,23 +60,35 @@ func NewRealVsockListener(port uint32) (VsockListener, error) {
 // but no vhost-vsock-pci device is present from the hypervisor). Without a
 // transport, the listener will never receive connections.
 //
-// Returns true if a vsock transport is attached (local CID is a real guest
-// CID, not VMADDR_CID_ANY).
+// A real guest CID assigned by the hypervisor is always >= 3:
+//   - CID 0 = VMADDR_CID_HYPERVISOR
+//   - CID 1 = VMADDR_CID_LOCAL (reserved)
+//   - CID 2 = VMADDR_CID_HOST
+//   - CID 0xFFFFFFFF = VMADDR_CID_ANY (wildcard)
+//
+// When no transport is attached (no vhost-vsock-pci device), the ioctl
+// returns CID 2 (host) rather than a guest CID, so checking != VMADDR_CID_ANY
+// alone is insufficient. We require CID >= 3 to confirm a real transport.
 func VsockTransportAvailable() bool {
 	f, err := os.Open("/dev/vsock")
 	if err != nil {
+		log.Printf("vsock: /dev/vsock not available: %v", err)
 		return false
 	}
 	defer f.Close()
 
-	// IOCTL_VM_SOCKETS_GET_LOCAL_CID returns the guest's CID.
-	// If no transport is attached, the CID will be VMADDR_CID_ANY (0xFFFFFFFF).
 	cid, err := unix.IoctlGetUint32(int(f.Fd()), unix.IOCTL_VM_SOCKETS_GET_LOCAL_CID)
 	if err != nil {
+		log.Printf("vsock: ioctl GET_LOCAL_CID failed: %v", err)
 		return false
 	}
 
-	return cid != unix.VMADDR_CID_ANY
+	log.Printf("vsock: local CID = %d (0x%08X)", cid, cid)
+
+	// Guest CIDs assigned by the hypervisor are >= 3. CID 0 (hypervisor),
+	// 1 (local), 2 (host), and 0xFFFFFFFF (any) all indicate no real
+	// guest transport is available.
+	return cid >= 3 && cid != unix.VMADDR_CID_ANY
 }
 
 func (l *vsockListener) Accept() (net.Conn, error) {

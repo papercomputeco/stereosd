@@ -67,6 +67,12 @@ func (s *IPCServer) Serve(ctx context.Context) error {
 		return fmt.Errorf("ipc: chmod %s: %w", s.socketPath, err)
 	}
 
+	// Set group ownership to "admin" so admin users can access the socket.
+	// Non-fatal: in dev/test environments the admin group may not exist.
+	if err := chownToGroup(s.socketPath, AdminGroup); err != nil {
+		log.Printf("ipc: warning: chown %s to group %s: %v", s.socketPath, AdminGroup, err)
+	}
+
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
 

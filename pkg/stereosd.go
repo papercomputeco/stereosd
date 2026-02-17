@@ -49,6 +49,11 @@ const (
 
 	// SocketPath is the unix socket path for the stereosd HTTP API.
 	SocketPath = "/run/stereos/stereosd.sock"
+
+	// AdminGroup is the group that gets read/write access to daemon sockets.
+	// Members of this group (typically the "admin" user) can connect to
+	// stereosd and agentd sockets and attach to agent tmux sessions.
+	AdminGroup = "admin"
 )
 
 // ListenerFactory creates the vsock listener. This is a function type so

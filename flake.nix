@@ -4,9 +4,11 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    dagger.url = "github:dagger/nix";
+    dagger.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils, dagger }:
     {
       overlays.default = final: prev: {
         stereosd = final.buildGoModule {
@@ -84,16 +86,18 @@
         };
 
         devShells.default = pkgs.mkShell {
-          buildInputs = with pkgs; [
+          buildInputs = [
             # Go toolchain
-            go_1_25
-            gotools
+            pkgs.go_1_25
+            pkgs.gotools
+            pkgs.ginkgo
 
             # Build tools
-            gnumake
+            pkgs.gnumake
 
             # Test tools
-            hurl
+            pkgs.hurl
+            dagger.packages.${system}.dagger
           ];
 
           shellHook = ''

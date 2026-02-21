@@ -21,6 +21,7 @@
             "-X github.com/papercomputeco/stereosd/pkg/version.Version=${self.shortRev or "dev"}"
           ];
           env.CGO_ENABLED = 0;
+          subPackages = [ "." ];
 
           # Tests require system-level capabilities (vsock, mount, shutdown)
           # that are unavailable in the Nix build sandbox.

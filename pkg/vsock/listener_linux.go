@@ -1,7 +1,6 @@
 //go:build linux
 
-// vsock_linux.go provides the real AF_VSOCK listener for Linux guests.
-package stereosd
+package vsock
 
 import (
 	"fmt"
@@ -9,30 +8,23 @@ import (
 	"net"
 	"os"
 	"syscall"
-	"time"
 
 	"golang.org/x/sys/unix"
 )
 
-// vsockAddr implements net.Addr for vsock addresses.
-type vsockAddr struct {
-	cid  uint32
-	port uint32
-}
-
-func (a *vsockAddr) Network() string { return "vsock" }
-func (a *vsockAddr) String() string  { return fmt.Sprintf("vsock(%d:%d)", a.cid, a.port) }
-
-// vsockListener wraps a raw vsock file descriptor as a net.Listener.
+// vsockListener wraps a raw AF_VSOCK file descriptor as a [listener.Listener].
 type vsockListener struct {
 	fd   int
 	port uint32
 }
 
-// NewRealVsockListener creates a listener on AF_VSOCK at the given port.
+// NewListener creates a listener on AF_VSOCK at the given port.
 // It binds to VMADDR_CID_ANY so it accepts connections from any CID (the host).
-func NewRealVsockListener(port uint32) (VsockListener, error) {
-	fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM, 0)
+//
+// The socket is created with SOCK_CLOEXEC to prevent fd leakage to child
+// processes.
+func NewListener(port uint32) (net.Listener, error) {
+	fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
 		return nil, fmt.Errorf("vsock socket: %w", err)
 	}
@@ -55,7 +47,7 @@ func NewRealVsockListener(port uint32) (VsockListener, error) {
 	return &vsockListener{fd: fd, port: port}, nil
 }
 
-// VsockTransportAvailable checks whether a real vsock transport is attached
+// TransportAvailable checks whether a real vsock transport is attached
 // by querying the local CID via /dev/vsock. AF_VSOCK sockets can be created
 // and bound even without a transport (e.g., when the kernel module is loaded
 // but no vhost-vsock-pci device is present from the hypervisor). Without a
@@ -70,8 +62,8 @@ func NewRealVsockListener(port uint32) (VsockListener, error) {
 // When no transport is attached (no vhost-vsock-pci device), the ioctl
 // returns CID 2 (host) rather than a guest CID, so checking != VMADDR_CID_ANY
 // alone is insufficient. We require CID >= 3 to confirm a real transport.
-func VsockTransportAvailable() bool {
-	f, err := os.Open("/dev/vsock")
+func TransportAvailable() bool {
+	f, err := os.Open(devVsockPath)
 	if err != nil {
 		log.Printf("vsock: /dev/vsock not available: %v", err)
 		return false
@@ -93,7 +85,11 @@ func VsockTransportAvailable() bool {
 }
 
 func (l *vsockListener) Accept() (net.Conn, error) {
-	nfd, sa, err := unix.Accept(l.fd)
+	// Accept4 with SOCK_CLOEXEC|SOCK_NONBLOCK gives us a non-blocking,
+	// close-on-exec fd in a single syscall. The non-blocking flag is
+	// required so that os.NewFile registers the fd with the runtime
+	// netpoller, enabling SetDeadline support.
+	nfd, sa, err := unix.Accept4(l.fd, unix.SOCK_CLOEXEC|unix.SOCK_NONBLOCK)
 	if err != nil {
 		return nil, err
 	}
@@ -107,17 +103,18 @@ func (l *vsockListener) Accept() (net.Conn, error) {
 
 	// Wrap the raw fd in an *os.File for I/O. We cannot use net.FileConn
 	// because Go's net package does not support AF_VSOCK sockets —
-	// getsockname fails on them. Instead, vsockConn implements net.Conn
+	// getsockname fails on them. Instead, conn implements net.Conn
 	// directly on top of the *os.File.
 	file := os.NewFile(uintptr(nfd), "vsock")
 	if file == nil {
+		unix.Close(nfd)
 		return nil, fmt.Errorf("vsock accept: invalid fd %d", nfd)
 	}
 
-	return &vsockConn{
+	return &conn{
 		file:       file,
-		remoteAddr: &vsockAddr{cid: remoteCID, port: remotePort},
-		localAddr:  &vsockAddr{cid: unix.VMADDR_CID_ANY, port: l.port},
+		remoteAddr: &Addr{CID: remoteCID, Port: remotePort},
+		localAddr:  &Addr{CID: unix.VMADDR_CID_ANY, Port: l.port},
 	}, nil
 }
 
@@ -126,23 +123,5 @@ func (l *vsockListener) Close() error {
 }
 
 func (l *vsockListener) Addr() net.Addr {
-	return &vsockAddr{cid: unix.VMADDR_CID_ANY, port: l.port}
+	return &Addr{CID: unix.VMADDR_CID_ANY, Port: l.port}
 }
-
-// vsockConn implements net.Conn over an AF_VSOCK socket using an *os.File
-// for I/O. Go's net.FileConn does not support AF_VSOCK (getsockname fails),
-// so we implement the interface directly.
-type vsockConn struct {
-	file       *os.File
-	remoteAddr net.Addr
-	localAddr  net.Addr
-}
-
-func (c *vsockConn) Read(b []byte) (int, error)         { return c.file.Read(b) }
-func (c *vsockConn) Write(b []byte) (int, error)        { return c.file.Write(b) }
-func (c *vsockConn) Close() error                       { return c.file.Close() }
-func (c *vsockConn) RemoteAddr() net.Addr               { return c.remoteAddr }
-func (c *vsockConn) LocalAddr() net.Addr                { return c.localAddr }
-func (c *vsockConn) SetDeadline(t time.Time) error      { return c.file.SetDeadline(t) }
-func (c *vsockConn) SetReadDeadline(t time.Time) error  { return c.file.SetReadDeadline(t) }
-func (c *vsockConn) SetWriteDeadline(t time.Time) error { return c.file.SetWriteDeadline(t) }

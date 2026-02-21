@@ -7,6 +7,6 @@ Use this skill when testing, validating, or checking Go code.
 
 ---
 
-Use Dagger with `dagger check --quiet --cloud` when all checks should be run.
+Use Dagger with `dagger check --silent --cloud` when all checks should be run.
 
 * To run just tests: Use `dagger call test --silent --cloud`

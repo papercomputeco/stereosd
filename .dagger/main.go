@@ -71,6 +71,17 @@ func wrapNixDev(args ...string) []string {
 	return append([]string{"nix", "develop", "--command"}, args...)
 }
 
+// Build verifies that the Nix flake's buildGoModule derivation succeeds.
+// This catches issues that would break downstream flake importers (e.g.
+// missing subPackages, vendorHash drift, ldflags errors).
+//
+// +check
+func (m *Stereosd) Build(ctx context.Context) (string, error) {
+	return m.nixOSContainer(m.Source).
+		WithExec([]string{"nix", "build"}).
+		Stdout(ctx)
+}
+
 // Test runs the Go test suite.
 //
 // +check

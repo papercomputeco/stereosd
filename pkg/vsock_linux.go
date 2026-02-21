@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -104,9 +105,17 @@ func (l *vsockListener) Accept() (net.Conn, error) {
 		remotePort = vsa.Port
 	}
 
-	file := newConnFromFD(nfd)
+	// Wrap the raw fd in an *os.File for I/O. We cannot use net.FileConn
+	// because Go's net package does not support AF_VSOCK sockets —
+	// getsockname fails on them. Instead, vsockConn implements net.Conn
+	// directly on top of the *os.File.
+	file := os.NewFile(uintptr(nfd), "vsock")
+	if file == nil {
+		return nil, fmt.Errorf("vsock accept: invalid fd %d", nfd)
+	}
+
 	return &vsockConn{
-		Conn:       file,
+		file:       file,
 		remoteAddr: &vsockAddr{cid: remoteCID, port: remotePort},
 		localAddr:  &vsockAddr{cid: unix.VMADDR_CID_ANY, port: l.port},
 	}, nil
@@ -120,24 +129,20 @@ func (l *vsockListener) Addr() net.Addr {
 	return &vsockAddr{cid: unix.VMADDR_CID_ANY, port: l.port}
 }
 
-// vsockConn wraps a net.Conn with vsock-specific address information.
+// vsockConn implements net.Conn over an AF_VSOCK socket using an *os.File
+// for I/O. Go's net.FileConn does not support AF_VSOCK (getsockname fails),
+// so we implement the interface directly.
 type vsockConn struct {
-	net.Conn
+	file       *os.File
 	remoteAddr net.Addr
 	localAddr  net.Addr
 }
 
-func (c *vsockConn) RemoteAddr() net.Addr { return c.remoteAddr }
-func (c *vsockConn) LocalAddr() net.Addr  { return c.localAddr }
-
-// newConnFromFD creates a net.Conn from a raw file descriptor.
-func newConnFromFD(fd int) net.Conn {
-	f := newFileFromFD(fd)
-	conn, err := net.FileConn(f)
-	f.Close() // FileConn dups the fd
-	if err != nil {
-		// This shouldn't happen with a valid fd, but handle it gracefully
-		return nil
-	}
-	return conn
-}
+func (c *vsockConn) Read(b []byte) (int, error)         { return c.file.Read(b) }
+func (c *vsockConn) Write(b []byte) (int, error)        { return c.file.Write(b) }
+func (c *vsockConn) Close() error                       { return c.file.Close() }
+func (c *vsockConn) RemoteAddr() net.Addr               { return c.remoteAddr }
+func (c *vsockConn) LocalAddr() net.Addr                { return c.localAddr }
+func (c *vsockConn) SetDeadline(t time.Time) error      { return c.file.SetDeadline(t) }
+func (c *vsockConn) SetReadDeadline(t time.Time) error  { return c.file.SetReadDeadline(t) }
+func (c *vsockConn) SetWriteDeadline(t time.Time) error { return c.file.SetWriteDeadline(t) }

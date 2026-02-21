@@ -23,9 +23,13 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/papercomputeco/stereosd/pkg/tcp"
+	"github.com/papercomputeco/stereosd/pkg/vsock"
 )
 
 const (
@@ -56,10 +60,6 @@ const (
 	AdminGroup = "admin"
 )
 
-// ListenerFactory creates the vsock listener. This is a function type so
-// it can be replaced in tests with a TCP or Unix listener.
-type ListenerFactory func(port uint32) (VsockListener, error)
-
 // Config holds the daemon configuration.
 type Config struct {
 	// VsockPort is the port to listen on for host communication.
@@ -83,10 +83,6 @@ type Config struct {
 
 	// RuntimeDirs defines the runtime directory paths.
 	RuntimeDirs RuntimeDirs
-
-	// ListenerFactory creates the vsock listener.
-	// If nil, the real vsock listener is used.
-	ListenerFactory ListenerFactory
 
 	// Commander abstracts system commands. If nil, uses real exec.
 	Commander Commander
@@ -113,6 +109,10 @@ type Daemon struct {
 	ipc       *IPCServer
 	agentd    *AgentdClient
 	shutdown  *ShutdownCoordinator
+
+	// listener overrides the auto-detected control plane listener when
+	// set. If nil, createListener selects one based on Config.ListenMode.
+	listener net.Listener
 
 	// shutdownRequested is closed when a shutdown command is received,
 	// signaling the main Run loop to begin shutdown.
@@ -174,19 +174,19 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	d.lifecycle.Transition(StateBooting, "runtime directories ready")
 
-	// Step 2: Start the vsock listener
-	vsockListener, err := d.createVsockListener()
+	// Step 2: Start the control plane listener
+	ln, err := d.createListener()
 	if err != nil {
-		return fmt.Errorf("vsock listener: %w", err)
+		return fmt.Errorf("listener: %w", err)
 	}
-	vsockServer := NewVsockServer(vsockListener, d)
+	server := NewServer(ln, d)
 
 	// Step 3: Start the HTTP API and vsock servers in background goroutines
 	errCh := make(chan error, 2)
 
 	go func() {
-		if err := vsockServer.Serve(ctx); err != nil {
-			errCh <- fmt.Errorf("vsock server: %w", err)
+		if err := server.Serve(ctx); err != nil {
+			errCh <- fmt.Errorf("server: %w", err)
 		}
 	}()
 
@@ -222,32 +222,31 @@ func (d *Daemon) Run(ctx context.Context) error {
 	return nil
 }
 
-// createVsockListener creates the control plane listener based on the
-// configured listen mode. When ListenerFactory is set (tests), it takes
-// precedence over the listen mode.
-func (d *Daemon) createVsockListener() (VsockListener, error) {
-	if d.config.ListenerFactory != nil {
-		return d.config.ListenerFactory(d.config.VsockPort)
+// createListener creates the control plane listener based on the configured
+// listen mode. When d.listener is already set, it is returned directly.
+func (d *Daemon) createListener() (net.Listener, error) {
+	if d.listener != nil {
+		return d.listener, nil
 	}
 
 	switch d.config.ListenMode {
 	case "tcp":
-		return NewTCPListener(d.config.VsockPort)
+		return tcp.NewListener(d.config.VsockPort)
 	case "vsock":
-		return NewRealVsockListener(d.config.VsockPort)
+		return vsock.NewListener(d.config.VsockPort)
 	default: // "auto"
 		// Check if a vsock transport is actually attached (e.g., vhost-vsock-pci
 		// from the hypervisor). AF_VSOCK sockets can be created even without a
 		// transport (the kernel module is loaded), but the listener will never
 		// receive connections without a device from the host side.
-		if !VsockTransportAvailable() {
+		if !vsock.TransportAvailable() {
 			log.Printf("vsock: no vsock transport detected, using TCP listener")
-			return NewTCPListener(d.config.VsockPort)
+			return tcp.NewListener(d.config.VsockPort)
 		}
-		l, err := NewRealVsockListener(d.config.VsockPort)
+		l, err := vsock.NewListener(d.config.VsockPort)
 		if err != nil {
 			log.Printf("vsock: AF_VSOCK unavailable (%v), falling back to TCP", err)
-			return NewTCPListener(d.config.VsockPort)
+			return tcp.NewListener(d.config.VsockPort)
 		}
 		return l, nil
 	}
@@ -261,10 +260,10 @@ func (d *Daemon) requestShutdown() {
 	})
 }
 
-// -- VsockHandler implementation --------------------------------------------
-// HandleVsockMessage processes messages received from the host over vsock.
+// -- Handler implementation -------------------------------------------------
+// HandleMessage processes messages received from the host.
 
-func (d *Daemon) HandleVsockMessage(ctx context.Context, env *Envelope) (*Envelope, error) {
+func (d *Daemon) HandleMessage(ctx context.Context, env *Envelope) (*Envelope, error) {
 	switch env.Type {
 	case MsgPing:
 		return NewEnvelope(MsgPong, nil)

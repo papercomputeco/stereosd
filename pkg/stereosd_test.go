@@ -1,4 +1,4 @@
-package stereosd_test
+package stereosd
 
 import (
 	"bufio"
@@ -17,8 +17,6 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-
-	"github.com/papercomputeco/stereosd/pkg"
 )
 
 func TestStereosd(t *testing.T) {
@@ -82,26 +80,9 @@ func (m *mockCommander) getCommands() [][]string {
 	return result
 }
 
-// testListenerFactory creates a TCP listener as a vsock substitute for tests.
-func testListenerFactory(port uint32) (stereosd.VsockListener, error) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return nil, err
-	}
-	return &testVsockListener{listener: listener}, nil
-}
-
-type testVsockListener struct {
-	listener net.Listener
-}
-
-func (t *testVsockListener) Accept() (net.Conn, error) { return t.listener.Accept() }
-func (t *testVsockListener) Close() error              { return t.listener.Close() }
-func (t *testVsockListener) Addr() net.Addr            { return t.listener.Addr() }
-
-// sendVsockMessage connects to a TCP address and sends a JSON message,
+// sendMessage connects to a TCP address and sends a JSON message,
 // returning the response envelope.
-func sendVsockMessage(addr string, env *stereosd.Envelope) (*stereosd.Envelope, error) {
+func sendMessage(addr string, env *Envelope) (*Envelope, error) {
 	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
@@ -121,7 +102,7 @@ func sendVsockMessage(addr string, env *stereosd.Envelope) (*stereosd.Envelope, 
 		return nil, fmt.Errorf("no response")
 	}
 
-	var resp stereosd.Envelope
+	var resp Envelope
 	if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
 		return nil, fmt.Errorf("unmarshal response: %w", err)
 	}
@@ -189,33 +170,33 @@ func ipcPost(socketPath, path string, payload any) (map[string]any, int, error) 
 var _ = Describe("Protocol", func() {
 	Describe("Envelope", func() {
 		It("should create an envelope with a payload", func() {
-			env, err := stereosd.NewEnvelope(stereosd.MsgPing, nil)
+			env, err := NewEnvelope(MsgPing, nil)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(env.Type).To(Equal(stereosd.MsgPing))
+			Expect(env.Type).To(Equal(MsgPing))
 			Expect(env.Payload).To(BeNil())
 		})
 
 		It("should create an envelope with a typed payload", func() {
-			payload := &stereosd.LifecyclePayload{
-				State:   stereosd.StateReady,
+			payload := &LifecyclePayload{
+				State:   StateReady,
 				Message: "all systems go",
 			}
-			env, err := stereosd.NewEnvelope(stereosd.MsgLifecycle, payload)
+			env, err := NewEnvelope(MsgLifecycle, payload)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(env.Type).To(Equal(stereosd.MsgLifecycle))
+			Expect(env.Type).To(Equal(MsgLifecycle))
 			Expect(env.Payload).NotTo(BeNil())
 		})
 
 		It("should decode a payload from an envelope", func() {
-			payload := &stereosd.SecretPayload{
+			payload := &SecretPayload{
 				Name:  "API_KEY",
 				Value: "sk-test-12345",
 				Mode:  0600,
 			}
-			env, err := stereosd.NewEnvelope(stereosd.MsgInjectSecret, payload)
+			env, err := NewEnvelope(MsgInjectSecret, payload)
 			Expect(err).NotTo(HaveOccurred())
 
-			var decoded stereosd.SecretPayload
+			var decoded SecretPayload
 			Expect(env.DecodePayload(&decoded)).To(Succeed())
 			Expect(decoded.Name).To(Equal("API_KEY"))
 			Expect(decoded.Value).To(Equal("sk-test-12345"))
@@ -223,41 +204,41 @@ var _ = Describe("Protocol", func() {
 		})
 
 		It("should return an error when decoding a nil payload", func() {
-			env, _ := stereosd.NewEnvelope(stereosd.MsgPing, nil)
+			env, _ := NewEnvelope(MsgPing, nil)
 			var target struct{}
 			Expect(env.DecodePayload(&target)).To(HaveOccurred())
 		})
 
 		It("should roundtrip through JSON", func() {
-			original, _ := stereosd.NewEnvelope(stereosd.MsgAck, &stereosd.AckPayload{
-				ReplyTo: stereosd.MsgInjectSecret,
+			original, _ := NewEnvelope(MsgAck, &AckPayload{
+				ReplyTo: MsgInjectSecret,
 				OK:      true,
 			})
 			data, err := json.Marshal(original)
 			Expect(err).NotTo(HaveOccurred())
 
-			var restored stereosd.Envelope
+			var restored Envelope
 			Expect(json.Unmarshal(data, &restored)).To(Succeed())
-			Expect(restored.Type).To(Equal(stereosd.MsgAck))
+			Expect(restored.Type).To(Equal(MsgAck))
 
-			var ack stereosd.AckPayload
+			var ack AckPayload
 			Expect(restored.DecodePayload(&ack)).To(Succeed())
 			Expect(ack.OK).To(BeTrue())
-			Expect(ack.ReplyTo).To(Equal(stereosd.MsgInjectSecret))
+			Expect(ack.ReplyTo).To(Equal(MsgInjectSecret))
 		})
 	})
 
 	Describe("Constants", func() {
 		It("should use the correct vsock port", func() {
-			Expect(stereosd.VsockPort).To(BeEquivalentTo(1024))
+			Expect(VsockPort).To(BeEquivalentTo(1024))
 		})
 
 		It("should use tmpfs-backed secret directory", func() {
-			Expect(stereosd.SecretDir).To(Equal("/run/stereos/secrets"))
+			Expect(SecretDir).To(Equal("/run/stereos/secrets"))
 		})
 
 		It("should use the correct unix socket path", func() {
-			Expect(stereosd.SocketPath).To(Equal("/run/stereos/stereosd.sock"))
+			Expect(SocketPath).To(Equal("/run/stereos/stereosd.sock"))
 		})
 	})
 })
@@ -267,22 +248,22 @@ var _ = Describe("Protocol", func() {
 // ============================================================================
 
 var _ = Describe("LifecycleManager", func() {
-	var lm *stereosd.LifecycleManager
+	var lm *LifecycleManager
 
 	BeforeEach(func() {
-		lm = stereosd.NewLifecycleManager()
+		lm = NewLifecycleManager()
 	})
 
 	It("should start in booting state", func() {
-		Expect(lm.State()).To(Equal(stereosd.StateBooting))
+		Expect(lm.State()).To(Equal(StateBooting))
 	})
 
 	It("should transition states", func() {
-		lm.Transition(stereosd.StateReady, "all systems go")
-		Expect(lm.State()).To(Equal(stereosd.StateReady))
+		lm.Transition(StateReady, "all systems go")
+		Expect(lm.State()).To(Equal(StateReady))
 
-		lm.Transition(stereosd.StateHealthy, "agents running")
-		Expect(lm.State()).To(Equal(stereosd.StateHealthy))
+		lm.Transition(StateHealthy, "agents running")
+		Expect(lm.State()).To(Equal(StateHealthy))
 	})
 
 	It("should track uptime", func() {
@@ -291,12 +272,12 @@ var _ = Describe("LifecycleManager", func() {
 	})
 
 	It("should track agent status", func() {
-		lm.UpdateAgentStatus(stereosd.AgentStatusPayload{
+		lm.UpdateAgentStatus(AgentStatusPayload{
 			Name:    "opencode",
 			Running: true,
 			Session: "opencode-main",
 		})
-		lm.UpdateAgentStatus(stereosd.AgentStatusPayload{
+		lm.UpdateAgentStatus(AgentStatusPayload{
 			Name:    "claude-code",
 			Running: true,
 			Session: "claude-main",
@@ -309,11 +290,11 @@ var _ = Describe("LifecycleManager", func() {
 	})
 
 	It("should update existing agent status", func() {
-		lm.UpdateAgentStatus(stereosd.AgentStatusPayload{
+		lm.UpdateAgentStatus(AgentStatusPayload{
 			Name:    "opencode",
 			Running: true,
 		})
-		lm.UpdateAgentStatus(stereosd.AgentStatusPayload{
+		lm.UpdateAgentStatus(AgentStatusPayload{
 			Name:    "opencode",
 			Running: false,
 			Error:   "crashed",
@@ -326,21 +307,21 @@ var _ = Describe("LifecycleManager", func() {
 	})
 
 	It("should report health with uptime", func() {
-		lm.Transition(stereosd.StateReady, "ready")
+		lm.Transition(StateReady, "ready")
 		health := lm.Health()
-		Expect(health.State).To(Equal(stereosd.StateReady))
+		Expect(health.State).To(Equal(StateReady))
 		Expect(health.Uptime).To(BeNumerically(">=", 0))
 	})
 
 	It("should notify via vsock sender when transitioning", func() {
-		var received *stereosd.Envelope
-		lm.SetVsockSender(func(env *stereosd.Envelope) {
+		var received *Envelope
+		lm.SetVsockSender(func(env *Envelope) {
 			received = env
 		})
 
-		lm.Transition(stereosd.StateReady, "ready")
+		lm.Transition(StateReady, "ready")
 		Expect(received).NotTo(BeNil())
-		Expect(received.Type).To(Equal(stereosd.MsgLifecycle))
+		Expect(received.Type).To(Equal(MsgLifecycle))
 	})
 })
 
@@ -350,7 +331,7 @@ var _ = Describe("LifecycleManager", func() {
 
 var _ = Describe("SecretManager", func() {
 	var (
-		sm        *stereosd.SecretManager
+		sm        *SecretManager
 		secretDir string
 	)
 
@@ -358,7 +339,7 @@ var _ = Describe("SecretManager", func() {
 		var err error
 		secretDir, err = os.MkdirTemp("", "stereos-secrets-test-*")
 		Expect(err).NotTo(HaveOccurred())
-		sm = stereosd.NewSecretManager(secretDir)
+		sm = NewSecretManager(secretDir)
 	})
 
 	AfterEach(func() {
@@ -366,7 +347,7 @@ var _ = Describe("SecretManager", func() {
 	})
 
 	It("should inject a secret to the filesystem", func() {
-		err := sm.Inject(&stereosd.SecretPayload{
+		err := sm.Inject(&SecretPayload{
 			Name:  "ANTHROPIC_API_KEY",
 			Value: "sk-ant-test-12345",
 		})
@@ -378,7 +359,7 @@ var _ = Describe("SecretManager", func() {
 	})
 
 	It("should set default permissions to 0600", func() {
-		err := sm.Inject(&stereosd.SecretPayload{
+		err := sm.Inject(&SecretPayload{
 			Name:  "SECRET",
 			Value: "value",
 		})
@@ -390,7 +371,7 @@ var _ = Describe("SecretManager", func() {
 	})
 
 	It("should set custom permissions", func() {
-		err := sm.Inject(&stereosd.SecretPayload{
+		err := sm.Inject(&SecretPayload{
 			Name:  "PUBLIC_KEY",
 			Value: "value",
 			Mode:  0644,
@@ -403,7 +384,7 @@ var _ = Describe("SecretManager", func() {
 	})
 
 	It("should clear the secret value from the payload after injection", func() {
-		payload := &stereosd.SecretPayload{
+		payload := &SecretPayload{
 			Name:  "KEY",
 			Value: "sensitive-data",
 		}
@@ -412,7 +393,7 @@ var _ = Describe("SecretManager", func() {
 	})
 
 	It("should reject empty names", func() {
-		err := sm.Inject(&stereosd.SecretPayload{
+		err := sm.Inject(&SecretPayload{
 			Name:  "",
 			Value: "value",
 		})
@@ -421,7 +402,7 @@ var _ = Describe("SecretManager", func() {
 	})
 
 	It("should reject path traversal attempts", func() {
-		err := sm.Inject(&stereosd.SecretPayload{
+		err := sm.Inject(&SecretPayload{
 			Name:  "../etc/passwd",
 			Value: "evil",
 		})
@@ -430,7 +411,7 @@ var _ = Describe("SecretManager", func() {
 	})
 
 	It("should reject names with slashes", func() {
-		err := sm.Inject(&stereosd.SecretPayload{
+		err := sm.Inject(&SecretPayload{
 			Name:  "foo/bar",
 			Value: "value",
 		})
@@ -439,12 +420,12 @@ var _ = Describe("SecretManager", func() {
 	})
 
 	It("should overwrite existing secrets", func() {
-		Expect(sm.Inject(&stereosd.SecretPayload{
+		Expect(sm.Inject(&SecretPayload{
 			Name:  "KEY",
 			Value: "version1",
 		})).To(Succeed())
 
-		Expect(sm.Inject(&stereosd.SecretPayload{
+		Expect(sm.Inject(&SecretPayload{
 			Name:  "KEY",
 			Value: "version2",
 		})).To(Succeed())
@@ -455,8 +436,8 @@ var _ = Describe("SecretManager", func() {
 	})
 
 	It("should list injected secrets", func() {
-		Expect(sm.Inject(&stereosd.SecretPayload{Name: "A", Value: "1"})).To(Succeed())
-		Expect(sm.Inject(&stereosd.SecretPayload{Name: "B", Value: "2"})).To(Succeed())
+		Expect(sm.Inject(&SecretPayload{Name: "A", Value: "1"})).To(Succeed())
+		Expect(sm.Inject(&SecretPayload{Name: "B", Value: "2"})).To(Succeed())
 
 		names, err := sm.List()
 		Expect(err).NotTo(HaveOccurred())
@@ -464,7 +445,7 @@ var _ = Describe("SecretManager", func() {
 	})
 
 	It("should remove secrets", func() {
-		Expect(sm.Inject(&stereosd.SecretPayload{Name: "KEY", Value: "val"})).To(Succeed())
+		Expect(sm.Inject(&SecretPayload{Name: "KEY", Value: "val"})).To(Succeed())
 		Expect(sm.Remove("KEY")).To(Succeed())
 
 		_, err := os.Stat(filepath.Join(secretDir, "KEY"))
@@ -482,13 +463,13 @@ var _ = Describe("SecretManager", func() {
 
 var _ = Describe("MountManager", func() {
 	var (
-		mm  *stereosd.MountManager
+		mm  *MountManager
 		cmd *mockCommander
 	)
 
 	BeforeEach(func() {
 		cmd = newMockCommander()
-		mm = stereosd.NewMountManager(cmd)
+		mm = NewMountManager(cmd)
 	})
 
 	It("should mount a virtiofs share", func() {
@@ -497,7 +478,7 @@ var _ = Describe("MountManager", func() {
 		defer os.RemoveAll(tmpDir)
 
 		mountPath := filepath.Join(tmpDir, "workspace")
-		err = mm.Mount(&stereosd.MountPayload{
+		err = mm.Mount(&MountPayload{
 			Tag:       "workspace0",
 			GuestPath: mountPath,
 			FSType:    "virtiofs",
@@ -512,7 +493,7 @@ var _ = Describe("MountManager", func() {
 		defer os.RemoveAll(tmpDir)
 
 		mountPath := filepath.Join(tmpDir, "data")
-		err = mm.Mount(&stereosd.MountPayload{
+		err = mm.Mount(&MountPayload{
 			Tag:       "data0",
 			GuestPath: mountPath,
 			FSType:    "9p",
@@ -534,7 +515,7 @@ var _ = Describe("MountManager", func() {
 	})
 
 	It("should reject empty tag", func() {
-		err := mm.Mount(&stereosd.MountPayload{
+		err := mm.Mount(&MountPayload{
 			Tag:       "",
 			GuestPath: "/workspace",
 			FSType:    "virtiofs",
@@ -544,7 +525,7 @@ var _ = Describe("MountManager", func() {
 	})
 
 	It("should reject empty guest_path", func() {
-		err := mm.Mount(&stereosd.MountPayload{
+		err := mm.Mount(&MountPayload{
 			Tag:       "test",
 			GuestPath: "",
 			FSType:    "virtiofs",
@@ -554,7 +535,7 @@ var _ = Describe("MountManager", func() {
 	})
 
 	It("should reject unsupported filesystem types", func() {
-		err := mm.Mount(&stereosd.MountPayload{
+		err := mm.Mount(&MountPayload{
 			Tag:       "test",
 			GuestPath: "/mnt/test",
 			FSType:    "ext4",
@@ -564,7 +545,7 @@ var _ = Describe("MountManager", func() {
 	})
 
 	It("should reject relative guest paths", func() {
-		err := mm.Mount(&stereosd.MountPayload{
+		err := mm.Mount(&MountPayload{
 			Tag:       "test",
 			GuestPath: "relative/path",
 			FSType:    "virtiofs",
@@ -576,7 +557,7 @@ var _ = Describe("MountManager", func() {
 	It("should reject mounts over system directories", func() {
 		systemDirs := []string{"/", "/nix", "/etc", "/bin", "/boot", "/dev", "/proc", "/sys", "/run"}
 		for _, dir := range systemDirs {
-			err := mm.Mount(&stereosd.MountPayload{
+			err := mm.Mount(&MountPayload{
 				Tag:       "test",
 				GuestPath: dir,
 				FSType:    "virtiofs",
@@ -587,7 +568,7 @@ var _ = Describe("MountManager", func() {
 	})
 
 	It("should reject mounts under system directories", func() {
-		err := mm.Mount(&stereosd.MountPayload{
+		err := mm.Mount(&MountPayload{
 			Tag:       "test",
 			GuestPath: "/nix/store/evil",
 			FSType:    "virtiofs",
@@ -604,10 +585,10 @@ var _ = Describe("MountManager", func() {
 		mount1 := filepath.Join(tmpDir, "a")
 		mount2 := filepath.Join(tmpDir, "b")
 
-		Expect(mm.Mount(&stereosd.MountPayload{
+		Expect(mm.Mount(&MountPayload{
 			Tag: "a", GuestPath: mount1, FSType: "virtiofs",
 		})).To(Succeed())
-		Expect(mm.Mount(&stereosd.MountPayload{
+		Expect(mm.Mount(&MountPayload{
 			Tag: "b", GuestPath: mount2, FSType: "virtiofs",
 		})).To(Succeed())
 
@@ -623,10 +604,10 @@ var _ = Describe("MountManager", func() {
 		mount1 := filepath.Join(tmpDir, "a")
 		mount2 := filepath.Join(tmpDir, "b")
 
-		Expect(mm.Mount(&stereosd.MountPayload{
+		Expect(mm.Mount(&MountPayload{
 			Tag: "first", GuestPath: mount1, FSType: "virtiofs",
 		})).To(Succeed())
-		Expect(mm.Mount(&stereosd.MountPayload{
+		Expect(mm.Mount(&MountPayload{
 			Tag: "second", GuestPath: mount2, FSType: "virtiofs",
 		})).To(Succeed())
 
@@ -654,7 +635,7 @@ var _ = Describe("MountManager", func() {
 		defer os.RemoveAll(tmpDir)
 
 		mountPath := filepath.Join(tmpDir, "ro")
-		err = mm.Mount(&stereosd.MountPayload{
+		err = mm.Mount(&MountPayload{
 			Tag:       "rodata",
 			GuestPath: mountPath,
 			FSType:    "virtiofs",
@@ -687,13 +668,13 @@ var _ = Describe("RuntimeDirs", func() {
 		Expect(err).NotTo(HaveOccurred())
 		defer os.RemoveAll(tmpDir)
 
-		dirs := stereosd.RuntimeDirs{
+		dirs := RuntimeDirs{
 			Base:    filepath.Join(tmpDir, "stereos"),
 			Secrets: filepath.Join(tmpDir, "stereos", "secrets"),
 			Config:  filepath.Join(tmpDir, "etc", "stereos"),
 		}
 
-		Expect(stereosd.EnsureRuntimeDirs(dirs)).To(Succeed())
+		Expect(EnsureRuntimeDirs(dirs)).To(Succeed())
 
 		info, err := os.Stat(dirs.Base)
 		Expect(err).NotTo(HaveOccurred())
@@ -713,18 +694,18 @@ var _ = Describe("RuntimeDirs", func() {
 		Expect(err).NotTo(HaveOccurred())
 		defer os.RemoveAll(tmpDir)
 
-		dirs := stereosd.RuntimeDirs{
+		dirs := RuntimeDirs{
 			Base:    filepath.Join(tmpDir, "stereos"),
 			Secrets: filepath.Join(tmpDir, "stereos", "secrets"),
 			Config:  filepath.Join(tmpDir, "etc", "stereos"),
 		}
 
-		Expect(stereosd.EnsureRuntimeDirs(dirs)).To(Succeed())
-		Expect(stereosd.EnsureRuntimeDirs(dirs)).To(Succeed()) // second call
+		Expect(EnsureRuntimeDirs(dirs)).To(Succeed())
+		Expect(EnsureRuntimeDirs(dirs)).To(Succeed()) // second call
 	})
 
 	It("should return correct default paths", func() {
-		dirs := stereosd.DefaultRuntimeDirs()
+		dirs := DefaultRuntimeDirs()
 		Expect(dirs.Base).To(Equal("/run/stereos"))
 		Expect(dirs.Secrets).To(Equal("/run/stereos/secrets"))
 		Expect(dirs.Config).To(Equal("/etc/stereos"))
@@ -737,23 +718,11 @@ var _ = Describe("RuntimeDirs", func() {
 
 var _ = Describe("Daemon", func() {
 	var (
-		daemon      *stereosd.Daemon
-		tmpDir      string
-		cmd         *mockCommander
-		vsockAddrCh chan string
-		ipcSocket   string
+		daemon    *Daemon
+		tmpDir    string
+		cmd       *mockCommander
+		ipcSocket string
 	)
-
-	getVsockAddr := func() string {
-		select {
-		case addr := <-vsockAddrCh:
-			// Put it back so subsequent calls still work
-			vsockAddrCh <- addr
-			return addr
-		default:
-			return ""
-		}
-	}
 
 	BeforeEach(func() {
 		var err error
@@ -762,43 +731,53 @@ var _ = Describe("Daemon", func() {
 
 		cmd = newMockCommander()
 		ipcSocket = filepath.Join(tmpDir, "stereosd.sock")
-		vsockAddrCh = make(chan string, 1)
 
-		// Track the vsock listener address
-		var vsockListener net.Listener
+		// Create a TCP listener to substitute for vsock in tests.
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		Expect(err).NotTo(HaveOccurred())
 
-		config := stereosd.Config{
-			VsockPort:  0, // not used directly; factory overrides
+		config := Config{
+			VsockPort:  0,
+			ListenMode: "auto",
 			SocketPath: ipcSocket,
-			RuntimeDirs: stereosd.RuntimeDirs{
+			RuntimeDirs: RuntimeDirs{
 				Base:    filepath.Join(tmpDir, "stereos"),
 				Secrets: filepath.Join(tmpDir, "stereos", "secrets"),
 				Config:  filepath.Join(tmpDir, "etc", "stereos"),
 			},
-			ListenerFactory: func(port uint32) (stereosd.VsockListener, error) {
-				var err error
-				vsockListener, err = net.Listen("tcp", "127.0.0.1:0")
-				if err != nil {
-					return nil, err
-				}
-				vsockAddrCh <- vsockListener.Addr().String()
-				return &testVsockListener{listener: vsockListener}, nil
-			},
 			Commander: cmd,
 		}
 
-		daemon = stereosd.NewDaemonWithConfig(config)
+		daemon = NewDaemonWithConfig(config)
+		daemon.listener = ln
 	})
 
 	AfterEach(func() {
 		os.RemoveAll(tmpDir)
 	})
 
+	// listenerAddr returns the TCP address of the injected test listener.
+	listenerAddr := func() string {
+		return daemon.listener.Addr().String()
+	}
+
+	// waitForListener polls until the daemon is accepting connections.
+	waitForListener := func() {
+		Eventually(func() bool {
+			conn, err := net.Dial("tcp", listenerAddr())
+			if err != nil {
+				return false
+			}
+			conn.Close()
+			return true
+		}, 2*time.Second, 50*time.Millisecond).Should(BeTrue())
+	}
+
 	It("should create a daemon instance", func() {
 		Expect(daemon).NotTo(BeNil())
 	})
 
-	It("should start and accept a vsock ping", func() {
+	It("should start and accept a ping", func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
@@ -807,63 +786,36 @@ var _ = Describe("Daemon", func() {
 			errCh <- daemon.Run(ctx)
 		}()
 
-		// Wait for the daemon to start listening
-		Eventually(func() bool {
-			addr := getVsockAddr()
-			if addr == "" {
-				return false
-			}
-			conn, err := net.Dial("tcp", addr)
-			if err != nil {
-				return false
-			}
-			conn.Close()
-			return true
-		}, 2*time.Second, 50*time.Millisecond).Should(BeTrue())
+		waitForListener()
 
-		// Send ping
-		env, err := stereosd.NewEnvelope(stereosd.MsgPing, nil)
+		env, err := NewEnvelope(MsgPing, nil)
 		Expect(err).NotTo(HaveOccurred())
 
-		resp, err := sendVsockMessage(getVsockAddr(), env)
+		resp, err := sendMessage(listenerAddr(), env)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.Type).To(Equal(stereosd.MsgPong))
+		Expect(resp.Type).To(Equal(MsgPong))
 
 		cancel()
 	})
 
-	It("should inject secrets via vsock", func() {
+	It("should inject secrets", func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
 		go daemon.Run(ctx)
+		waitForListener()
 
-		// Wait for the daemon to start
-		Eventually(func() bool {
-			addr := getVsockAddr()
-			if addr == "" {
-				return false
-			}
-			conn, err := net.Dial("tcp", addr)
-			if err != nil {
-				return false
-			}
-			conn.Close()
-			return true
-		}, 2*time.Second, 50*time.Millisecond).Should(BeTrue())
-
-		// Inject a secret
-		env, err := stereosd.NewEnvelope(stereosd.MsgInjectSecret, &stereosd.SecretPayload{
+		env, err := NewEnvelope(MsgInjectSecret, &SecretPayload{
 			Name:  "ANTHROPIC_API_KEY",
 			Value: "sk-ant-test-12345",
 		})
 		Expect(err).NotTo(HaveOccurred())
 
-		resp, err := sendVsockMessage(getVsockAddr(), env)
+		resp, err := sendMessage(listenerAddr(), env)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.Type).To(Equal(stereosd.MsgAck))
+		Expect(resp.Type).To(Equal(MsgAck))
 
-		var ack stereosd.AckPayload
+		var ack AckPayload
 		Expect(resp.DecodePayload(&ack)).To(Succeed())
 		Expect(ack.OK).To(BeTrue())
 
@@ -876,42 +828,29 @@ var _ = Describe("Daemon", func() {
 		cancel()
 	})
 
-	It("should handle mount requests via vsock", func() {
+	It("should handle mount requests", func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
 		go daemon.Run(ctx)
-
-		Eventually(func() bool {
-			addr := getVsockAddr()
-			if addr == "" {
-				return false
-			}
-			conn, err := net.Dial("tcp", addr)
-			if err != nil {
-				return false
-			}
-			conn.Close()
-			return true
-		}, 2*time.Second, 50*time.Millisecond).Should(BeTrue())
+		waitForListener()
 
 		mountPath := filepath.Join(tmpDir, "workspace")
-		env, err := stereosd.NewEnvelope(stereosd.MsgMount, &stereosd.MountPayload{
+		env, err := NewEnvelope(MsgMount, &MountPayload{
 			Tag:       "workspace0",
 			GuestPath: mountPath,
 			FSType:    "virtiofs",
 		})
 		Expect(err).NotTo(HaveOccurred())
 
-		resp, err := sendVsockMessage(getVsockAddr(), env)
+		resp, err := sendMessage(listenerAddr(), env)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.Type).To(Equal(stereosd.MsgAck))
+		Expect(resp.Type).To(Equal(MsgAck))
 
-		var ack stereosd.AckPayload
+		var ack AckPayload
 		Expect(resp.DecodePayload(&ack)).To(Succeed())
 		Expect(ack.OK).To(BeTrue())
 
-		// Verify mount command was called
 		Expect(cmd.hasCommand("mount")).To(BeTrue())
 
 		cancel()
@@ -923,17 +862,15 @@ var _ = Describe("Daemon", func() {
 
 		go daemon.Run(ctx)
 
-		// Wait for the IPC socket to be available
 		Eventually(func() bool {
 			_, err := os.Stat(ipcSocket)
 			return err == nil
 		}, 2*time.Second, 50*time.Millisecond).Should(BeTrue())
 
-		// Send a health request via HTTP API
 		result, status, err := ipcGet(ipcSocket, "/v1/health")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(status).To(Equal(http.StatusOK))
-		Expect(result["state"]).To(Equal(string(stereosd.StateReady)))
+		Expect(result["state"]).To(Equal(string(StateReady)))
 
 		cancel()
 	})
@@ -944,18 +881,15 @@ var _ = Describe("Daemon", func() {
 
 		go daemon.Run(ctx)
 
-		// Wait for the IPC socket to be available
 		Eventually(func() bool {
 			_, err := os.Stat(ipcSocket)
 			return err == nil
 		}, 2*time.Second, 50*time.Millisecond).Should(BeTrue())
 
-		// Manually update lifecycle with agent statuses (simulating what the poller does)
-		daemon.Lifecycle().ReplaceAgentStatuses([]stereosd.AgentStatusPayload{
+		daemon.Lifecycle().ReplaceAgentStatuses([]AgentStatusPayload{
 			{Name: "opencode", Running: true, Session: "opencode-main", Restarts: 0},
 		})
 
-		// Fetch agents via the HTTP API
 		result, status, err := ipcGet(ipcSocket, "/v1/agents")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(status).To(Equal(http.StatusOK))
@@ -972,35 +906,22 @@ var _ = Describe("Daemon", func() {
 		cancel()
 	})
 
-	It("should handle shutdown requests via vsock", func() {
+	It("should handle shutdown requests", func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
 		go daemon.Run(ctx)
+		waitForListener()
 
-		Eventually(func() bool {
-			addr := getVsockAddr()
-			if addr == "" {
-				return false
-			}
-			conn, err := net.Dial("tcp", addr)
-			if err != nil {
-				return false
-			}
-			conn.Close()
-			return true
-		}, 2*time.Second, 50*time.Millisecond).Should(BeTrue())
-
-		env, err := stereosd.NewEnvelope(stereosd.MsgShutdown, &stereosd.ShutdownPayload{
+		env, err := NewEnvelope(MsgShutdown, &ShutdownPayload{
 			Reason: "test shutdown",
 		})
 		Expect(err).NotTo(HaveOccurred())
 
-		resp, err := sendVsockMessage(getVsockAddr(), env)
+		resp, err := sendMessage(listenerAddr(), env)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.Type).To(Equal(stereosd.MsgAck))
+		Expect(resp.Type).To(Equal(MsgAck))
 
-		// Verify shutdown sequence was initiated
 		Eventually(func() bool {
 			return cmd.hasCommand("sync")
 		}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
@@ -1014,7 +935,6 @@ var _ = Describe("Daemon", func() {
 
 		go daemon.Run(ctx)
 
-		// Wait for daemon to start
 		Eventually(func() bool {
 			_, err := os.Stat(filepath.Join(tmpDir, "stereos"))
 			return err == nil
@@ -1031,31 +951,19 @@ var _ = Describe("Daemon", func() {
 		cancel()
 	})
 
-	It("should reject unknown vsock message types", func() {
+	It("should reject unknown message types", func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
 		go daemon.Run(ctx)
+		waitForListener()
 
-		Eventually(func() bool {
-			addr := getVsockAddr()
-			if addr == "" {
-				return false
-			}
-			conn, err := net.Dial("tcp", addr)
-			if err != nil {
-				return false
-			}
-			conn.Close()
-			return true
-		}, 2*time.Second, 50*time.Millisecond).Should(BeTrue())
-
-		env := &stereosd.Envelope{Type: "unknown_type"}
-		resp, err := sendVsockMessage(getVsockAddr(), env)
+		env := &Envelope{Type: "unknown_type"}
+		resp, err := sendMessage(listenerAddr(), env)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.Type).To(Equal(stereosd.MsgAck))
+		Expect(resp.Type).To(Equal(MsgAck))
 
-		var ack stereosd.AckPayload
+		var ack AckPayload
 		Expect(resp.DecodePayload(&ack)).To(Succeed())
 		Expect(ack.OK).To(BeFalse())
 		Expect(ack.Error).To(ContainSubstring("unknown"))
@@ -1065,27 +973,24 @@ var _ = Describe("Daemon", func() {
 })
 
 // ============================================================================
-// VsockServer tests (unit)
+// Server tests (unit)
 // ============================================================================
 
-var _ = Describe("VsockServer", func() {
+var _ = Describe("Server", func() {
 	It("should handle malformed JSON gracefully", func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		Expect(err).NotTo(HaveOccurred())
 
-		handler := &mockVsockHandler{}
-		server := stereosd.NewVsockServer(
-			&testVsockListener{listener: listener},
-			handler,
-		)
+		handler := &mockHandler{}
+		server := NewServer(ln, handler)
 
 		go server.Serve(ctx)
 
 		// Send malformed JSON
-		conn, err := net.Dial("tcp", listener.Addr().String())
+		conn, err := net.Dial("tcp", ln.Addr().String())
 		Expect(err).NotTo(HaveOccurred())
 		defer conn.Close()
 
@@ -1094,19 +999,19 @@ var _ = Describe("VsockServer", func() {
 		// Should get an error ack back
 		scanner := bufio.NewScanner(conn)
 		if scanner.Scan() {
-			var resp stereosd.Envelope
+			var resp Envelope
 			Expect(json.Unmarshal(scanner.Bytes(), &resp)).To(Succeed())
-			Expect(resp.Type).To(Equal(stereosd.MsgAck))
+			Expect(resp.Type).To(Equal(MsgAck))
 		}
 
 		cancel()
 	})
 })
 
-type mockVsockHandler struct{}
+type mockHandler struct{}
 
-func (m *mockVsockHandler) HandleVsockMessage(ctx context.Context, env *stereosd.Envelope) (*stereosd.Envelope, error) {
-	return stereosd.NewEnvelope(stereosd.MsgPong, nil)
+func (m *mockHandler) HandleMessage(ctx context.Context, env *Envelope) (*Envelope, error) {
+	return NewEnvelope(MsgPong, nil)
 }
 
 // ============================================================================
@@ -1166,7 +1071,7 @@ var _ = Describe("AgentdClient", func() {
 			})
 		}, nil)
 
-		client := stereosd.NewAgentdClient(agentdSocket)
+		client := NewAgentdClient(agentdSocket)
 		health, err := client.Health(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(health.State).To(Equal("running"))
@@ -1177,13 +1082,13 @@ var _ = Describe("AgentdClient", func() {
 		startAgentdMock(nil, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode([]stereosd.AgentStatusPayload{
+			json.NewEncoder(w).Encode([]AgentStatusPayload{
 				{Name: "claude-code", Running: true, Session: "claude-main", Restarts: 2},
 				{Name: "opencode", Running: false, Error: "crashed", Restarts: 1},
 			})
 		})
 
-		client := stereosd.NewAgentdClient(agentdSocket)
+		client := NewAgentdClient(agentdSocket)
 		agents, err := client.Agents(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(agents).To(HaveLen(2))
@@ -1196,14 +1101,13 @@ var _ = Describe("AgentdClient", func() {
 	})
 
 	It("should return an error when agentd is not reachable", func() {
-		// No mock server started — socket does not exist
-		client := stereosd.NewAgentdClient(filepath.Join(tmpDir, "nonexistent.sock"))
+		client := NewAgentdClient(filepath.Join(tmpDir, "nonexistent.sock"))
 		_, err := client.Agents(context.Background())
 		Expect(err).To(HaveOccurred())
 	})
 
 	It("should return the socket path", func() {
-		client := stereosd.NewAgentdClient(agentdSocket)
+		client := NewAgentdClient(agentdSocket)
 		Expect(client.SocketPath()).To(Equal(agentdSocket))
 	})
 })
@@ -1243,7 +1147,7 @@ var _ = Describe("AgentdPoller", func() {
 		mux.HandleFunc("GET /v1/agents", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode([]stereosd.AgentStatusPayload{
+			json.NewEncoder(w).Encode([]AgentStatusPayload{
 				{Name: "opencode", Running: true, Session: "opencode-main"},
 			})
 		})
@@ -1254,19 +1158,18 @@ var _ = Describe("AgentdPoller", func() {
 		agentdServer = &http.Server{Handler: mux}
 		go agentdServer.Serve(agentdLn)
 
-		lifecycle := stereosd.NewLifecycleManager()
-		lifecycle.Transition(stereosd.StateReady, "ready")
+		lifecycle := NewLifecycleManager()
+		lifecycle.Transition(StateReady, "ready")
 
-		client := stereosd.NewAgentdClient(agentdSocket)
-		poller := stereosd.NewAgentdPoller(client, lifecycle, 100*time.Millisecond)
+		client := NewAgentdClient(agentdSocket)
+		poller := NewAgentdPoller(client, lifecycle, 100*time.Millisecond)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
 		go poller.Run(ctx)
 
-		// The poller should update the lifecycle with agent statuses
-		Eventually(func() []stereosd.AgentStatusPayload {
+		Eventually(func() []AgentStatusPayload {
 			return lifecycle.Health().Agents
 		}, 2*time.Second, 50*time.Millisecond).Should(HaveLen(1))
 
@@ -1274,28 +1177,24 @@ var _ = Describe("AgentdPoller", func() {
 		Expect(health.Agents[0].Name).To(Equal("opencode"))
 		Expect(health.Agents[0].Running).To(BeTrue())
 
-		// Should transition to healthy when agents are running
-		Expect(lifecycle.State()).To(Equal(stereosd.StateHealthy))
+		Expect(lifecycle.State()).To(Equal(StateHealthy))
 
 		cancel()
 	})
 
 	It("should handle agentd being unavailable gracefully", func() {
-		// No mock server — poller should log and continue
-		lifecycle := stereosd.NewLifecycleManager()
+		lifecycle := NewLifecycleManager()
 
-		client := stereosd.NewAgentdClient(filepath.Join(tmpDir, "nonexistent.sock"))
-		poller := stereosd.NewAgentdPoller(client, lifecycle, 100*time.Millisecond)
+		client := NewAgentdClient(filepath.Join(tmpDir, "nonexistent.sock"))
+		poller := NewAgentdPoller(client, lifecycle, 100*time.Millisecond)
 
 		ctx, cancel := context.WithCancel(context.Background())
 
 		go poller.Run(ctx)
 
-		// Give the poller time to tick a few times
 		time.Sleep(300 * time.Millisecond)
 
-		// Lifecycle should still be booting (no crash)
-		Expect(lifecycle.State()).To(Equal(stereosd.StateBooting))
+		Expect(lifecycle.State()).To(Equal(StateBooting))
 
 		cancel()
 	})
@@ -1307,17 +1206,15 @@ var _ = Describe("AgentdPoller", func() {
 
 var _ = Describe("LifecycleManager ReplaceAgentStatuses", func() {
 	It("should replace all agent statuses atomically", func() {
-		lm := stereosd.NewLifecycleManager()
+		lm := NewLifecycleManager()
 
-		// Add initial agents via UpdateAgentStatus
-		lm.UpdateAgentStatus(stereosd.AgentStatusPayload{
+		lm.UpdateAgentStatus(AgentStatusPayload{
 			Name:    "old-agent",
 			Running: true,
 		})
 		Expect(lm.Health().Agents).To(HaveLen(1))
 
-		// Replace with a new set
-		lm.ReplaceAgentStatuses([]stereosd.AgentStatusPayload{
+		lm.ReplaceAgentStatuses([]AgentStatusPayload{
 			{Name: "claude-code", Running: true, Session: "claude-main", Restarts: 1},
 			{Name: "opencode", Running: false, Error: "stopped"},
 		})
@@ -1331,14 +1228,14 @@ var _ = Describe("LifecycleManager ReplaceAgentStatuses", func() {
 	})
 
 	It("should handle empty replacement", func() {
-		lm := stereosd.NewLifecycleManager()
+		lm := NewLifecycleManager()
 
-		lm.UpdateAgentStatus(stereosd.AgentStatusPayload{
+		lm.UpdateAgentStatus(AgentStatusPayload{
 			Name:    "agent",
 			Running: true,
 		})
 
-		lm.ReplaceAgentStatuses([]stereosd.AgentStatusPayload{})
+		lm.ReplaceAgentStatuses([]AgentStatusPayload{})
 
 		Expect(lm.Health().Agents).To(BeEmpty())
 	})
@@ -1351,24 +1248,21 @@ var _ = Describe("LifecycleManager ReplaceAgentStatuses", func() {
 var _ = Describe("ShutdownCoordinator", func() {
 	It("should sync filesystems and call systemctl poweroff", func() {
 		cmd := newMockCommander()
-		lifecycle := stereosd.NewLifecycleManager()
-		mounts := stereosd.NewMountManager(cmd)
+		lifecycle := NewLifecycleManager()
+		mounts := NewMountManager(cmd)
 
-		sc := stereosd.NewShutdownCoordinator(mounts, lifecycle, cmd)
+		sc := NewShutdownCoordinator(mounts, lifecycle, cmd)
 
 		ctx := context.Background()
-		err := sc.Execute(ctx, &stereosd.ShutdownPayload{
+		err := sc.Execute(ctx, &ShutdownPayload{
 			Reason: "test",
 		})
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(cmd.hasCommand("systemctl")).To(BeTrue())
 		Expect(cmd.hasCommand("sync")).To(BeTrue())
-		Expect(lifecycle.State()).To(Equal(stereosd.StateShutdown))
+		Expect(lifecycle.State()).To(Equal(StateShutdown))
 
-		// Verify systemctl poweroff is the only systemctl call —
-		// agentd is an independent systemd service and will receive
-		// SIGTERM from systemd during poweroff.
 		var systemctlCmds [][]string
 		for _, c := range cmd.getCommands() {
 			if c[0] == "systemctl" {

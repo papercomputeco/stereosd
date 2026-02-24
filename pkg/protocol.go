@@ -32,6 +32,11 @@ const (
 	// stereosd writes it to /etc/stereos/jcard.toml for agentd to consume.
 	MsgSetConfig MessageType = "set_config"
 
+	// MsgInjectSSHKey requests stereosd to write a public key to the
+	// specified user's ~/.ssh/authorized_keys file. This enables ephemeral
+	// per-sandbox SSH authentication without pre-baked keys in the image.
+	MsgInjectSSHKey MessageType = "inject_ssh_key"
+
 	// -- Guest -> Host (vsock) messages -------------------------------------
 
 	// MsgPong is the response to a ping.
@@ -164,4 +169,14 @@ type ShutdownPayload struct {
 type ConfigPayload struct {
 	// Content is the raw jcard.toml content to write to /etc/stereos/jcard.toml.
 	Content string `json:"content"`
+}
+
+// SSHKeyPayload is the payload for MsgInjectSSHKey messages.
+type SSHKeyPayload struct {
+	// User is the system user whose authorized_keys file will be updated
+	// (e.g., "admin").
+	User string `json:"user"`
+
+	// PublicKey is the SSH public key to inject (e.g., "ssh-ed25519 AAAA... comment").
+	PublicKey string `json:"public_key"`
 }

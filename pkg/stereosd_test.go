@@ -10,7 +10,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -454,6 +456,199 @@ var _ = Describe("SecretManager", func() {
 
 	It("should not error when removing non-existent secrets", func() {
 		Expect(sm.Remove("nonexistent")).To(Succeed())
+	})
+})
+
+// ============================================================================
+// SSH key injection tests
+// ============================================================================
+
+// fakeUserLookup returns a UserLookupFunc that resolves a single username
+// to a fake user with the given home directory. The uid/gid are set to the
+// current process's uid/gid so that chown calls succeed in tests.
+func fakeUserLookup(username, homeDir string) UserLookupFunc {
+	return func(name string) (*user.User, error) {
+		if name != username {
+			return nil, fmt.Errorf("user %q not found", name)
+		}
+		return &user.User{
+			Uid:      strconv.Itoa(os.Getuid()),
+			Gid:      strconv.Itoa(os.Getgid()),
+			Username: username,
+			HomeDir:  homeDir,
+		}, nil
+	}
+}
+
+var _ = Describe("SSHKeyManager", func() {
+	var (
+		mgr     *SSHKeyManager
+		homeDir string
+	)
+
+	BeforeEach(func() {
+		var err error
+		homeDir, err = os.MkdirTemp("", "stereos-sshkeys-test-*")
+		Expect(err).NotTo(HaveOccurred())
+		mgr = newSSHKeyManagerWithLookup(fakeUserLookup("admin", homeDir))
+	})
+
+	AfterEach(func() {
+		os.RemoveAll(homeDir)
+	})
+
+	It("should inject an SSH public key to authorized_keys", func() {
+		err := mgr.InjectAuthorizedKey(&SSHKeyPayload{
+			User:      "admin",
+			PublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey mb-sandbox",
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		content, err := os.ReadFile(filepath.Join(homeDir, ".ssh", "authorized_keys"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(content)).To(Equal("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey mb-sandbox\n"))
+	})
+
+	It("should create .ssh directory with mode 0700", func() {
+		err := mgr.InjectAuthorizedKey(&SSHKeyPayload{
+			User:      "admin",
+			PublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey mb-sandbox",
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		info, err := os.Stat(filepath.Join(homeDir, ".ssh"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(info.Mode().Perm()).To(Equal(os.FileMode(0700)))
+	})
+
+	It("should set authorized_keys permissions to 0600", func() {
+		err := mgr.InjectAuthorizedKey(&SSHKeyPayload{
+			User:      "admin",
+			PublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey mb-sandbox",
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		info, err := os.Stat(filepath.Join(homeDir, ".ssh", "authorized_keys"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(info.Mode().Perm()).To(Equal(os.FileMode(0600)))
+	})
+
+	It("should work when .ssh directory already exists", func() {
+		sshDir := filepath.Join(homeDir, ".ssh")
+		Expect(os.MkdirAll(sshDir, 0700)).To(Succeed())
+
+		err := mgr.InjectAuthorizedKey(&SSHKeyPayload{
+			User:      "admin",
+			PublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey mb-sandbox",
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		content, err := os.ReadFile(filepath.Join(sshDir, "authorized_keys"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(content)).To(ContainSubstring("ssh-ed25519"))
+	})
+
+	It("should overwrite existing authorized_keys", func() {
+		sshDir := filepath.Join(homeDir, ".ssh")
+		Expect(os.MkdirAll(sshDir, 0700)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(sshDir, "authorized_keys"), []byte("old-key\n"), 0600)).To(Succeed())
+
+		err := mgr.InjectAuthorizedKey(&SSHKeyPayload{
+			User:      "admin",
+			PublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINewKey mb-new",
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		content, err := os.ReadFile(filepath.Join(sshDir, "authorized_keys"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(content)).To(Equal("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINewKey mb-new\n"))
+		Expect(string(content)).NotTo(ContainSubstring("old-key"))
+	})
+
+	It("should ensure a trailing newline", func() {
+		err := mgr.InjectAuthorizedKey(&SSHKeyPayload{
+			User:      "admin",
+			PublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey comment",
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		content, err := os.ReadFile(filepath.Join(homeDir, ".ssh", "authorized_keys"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(content)).To(HaveSuffix("\n"))
+	})
+
+	It("should not double a trailing newline", func() {
+		err := mgr.InjectAuthorizedKey(&SSHKeyPayload{
+			User:      "admin",
+			PublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey comment\n",
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		content, err := os.ReadFile(filepath.Join(homeDir, ".ssh", "authorized_keys"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(content)).To(Equal("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey comment\n"))
+	})
+
+	It("should reject empty user", func() {
+		err := mgr.InjectAuthorizedKey(&SSHKeyPayload{
+			User:      "",
+			PublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey comment",
+		})
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("user cannot be empty"))
+	})
+
+	It("should reject empty public key", func() {
+		err := mgr.InjectAuthorizedKey(&SSHKeyPayload{
+			User:      "admin",
+			PublicKey: "",
+		})
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("public_key cannot be empty"))
+	})
+
+	It("should reject invalid key format", func() {
+		err := mgr.InjectAuthorizedKey(&SSHKeyPayload{
+			User:      "admin",
+			PublicKey: "not-a-valid-key",
+		})
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("invalid SSH public key format"))
+	})
+
+	It("should reject a key type without key data", func() {
+		// "ssh-ed25519" alone (no space + key data) should not match
+		err := mgr.InjectAuthorizedKey(&SSHKeyPayload{
+			User:      "admin",
+			PublicKey: "ssh-ed25519",
+		})
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("invalid SSH public key format"))
+	})
+
+	It("should accept ssh-rsa keys", func() {
+		err := mgr.InjectAuthorizedKey(&SSHKeyPayload{
+			User:      "admin",
+			PublicKey: "ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEAtest user@host",
+		})
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("should accept ecdsa keys", func() {
+		err := mgr.InjectAuthorizedKey(&SSHKeyPayload{
+			User:      "admin",
+			PublicKey: "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYtest user@host",
+		})
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("should return an error for unknown users", func() {
+		err := mgr.InjectAuthorizedKey(&SSHKeyPayload{
+			User:      "nonexistent",
+			PublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey comment",
+		})
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("lookup user"))
 	})
 })
 
@@ -967,6 +1162,78 @@ var _ = Describe("Daemon", func() {
 		Expect(resp.DecodePayload(&ack)).To(Succeed())
 		Expect(ack.OK).To(BeFalse())
 		Expect(ack.Error).To(ContainSubstring("unknown"))
+
+		cancel()
+	})
+
+	It("should inject SSH keys", func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		// Create a fake home directory and wire the daemon's SSHKeyManager
+		// to resolve "admin" to it.
+		fakeHome, err := os.MkdirTemp(tmpDir, "fakehome-*")
+		Expect(err).NotTo(HaveOccurred())
+		daemon.sshkeys = newSSHKeyManagerWithLookup(fakeUserLookup("admin", fakeHome))
+
+		go daemon.Run(ctx)
+		waitForListener()
+
+		env, err := NewEnvelope(MsgInjectSSHKey, &SSHKeyPayload{
+			User:      "admin",
+			PublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey mb-test-sandbox",
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		resp, err := sendMessage(listenerAddr(), env)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.Type).To(Equal(MsgAck))
+
+		var ack AckPayload
+		Expect(resp.DecodePayload(&ack)).To(Succeed())
+		Expect(ack.OK).To(BeTrue())
+		Expect(ack.ReplyTo).To(Equal(MsgInjectSSHKey))
+
+		// Verify the authorized_keys file was written correctly
+		akPath := filepath.Join(fakeHome, ".ssh", "authorized_keys")
+		content, err := os.ReadFile(akPath)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(content)).To(Equal("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey mb-test-sandbox\n"))
+
+		// Verify permissions
+		info, err := os.Stat(filepath.Join(fakeHome, ".ssh"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(info.Mode().Perm()).To(Equal(os.FileMode(0700)))
+
+		info, err = os.Stat(akPath)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(info.Mode().Perm()).To(Equal(os.FileMode(0600)))
+
+		cancel()
+	})
+
+	It("should return an error ack for invalid SSH key injection", func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		go daemon.Run(ctx)
+		waitForListener()
+
+		env, err := NewEnvelope(MsgInjectSSHKey, &SSHKeyPayload{
+			User:      "admin",
+			PublicKey: "not-a-valid-key",
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		resp, err := sendMessage(listenerAddr(), env)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.Type).To(Equal(MsgAck))
+
+		var ack AckPayload
+		Expect(resp.DecodePayload(&ack)).To(Succeed())
+		Expect(ack.OK).To(BeFalse())
+		Expect(ack.ReplyTo).To(Equal(MsgInjectSSHKey))
+		Expect(ack.Error).To(ContainSubstring("invalid SSH public key format"))
 
 		cancel()
 	})

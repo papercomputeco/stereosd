@@ -105,6 +105,7 @@ type Daemon struct {
 	config    Config
 	lifecycle *LifecycleManager
 	secrets   *SecretManager
+	sshkeys   *SSHKeyManager
 	mounts    *MountManager
 	ipc       *IPCServer
 	agentd    *AgentdClient
@@ -141,12 +142,14 @@ func NewDaemonWithConfig(config Config) *Daemon {
 
 	lifecycle := NewLifecycleManager()
 	secrets := NewSecretManager(config.RuntimeDirs.Secrets)
+	sshkeys := NewSSHKeyManager()
 	mounts := NewMountManager(commander)
 
 	d := &Daemon{
 		config:            config,
 		lifecycle:         lifecycle,
 		secrets:           secrets,
+		sshkeys:           sshkeys,
 		mounts:            mounts,
 		agentd:            NewAgentdClient(config.AgentdSocketPath),
 		shutdownRequested: make(chan struct{}),
@@ -307,6 +310,23 @@ func (d *Daemon) HandleMessage(ctx context.Context, env *Envelope) (*Envelope, e
 			OK:      true,
 		})
 
+	case MsgInjectSSHKey:
+		var payload SSHKeyPayload
+		if err := env.DecodePayload(&payload); err != nil {
+			return nil, fmt.Errorf("decode ssh key payload: %w", err)
+		}
+		if err := d.sshkeys.InjectAuthorizedKey(&payload); err != nil {
+			return NewEnvelope(MsgAck, &AckPayload{
+				ReplyTo: MsgInjectSSHKey,
+				OK:      false,
+				Error:   err.Error(),
+			})
+		}
+		return NewEnvelope(MsgAck, &AckPayload{
+			ReplyTo: MsgInjectSSHKey,
+			OK:      true,
+		})
+
 	case MsgMount:
 		var payload MountPayload
 		if err := env.DecodePayload(&payload); err != nil {
@@ -362,6 +382,11 @@ func (d *Daemon) Secrets() *SecretManager {
 // Mounts returns the mount manager for external access.
 func (d *Daemon) Mounts() *MountManager {
 	return d.mounts
+}
+
+// SSHKeys returns the SSH key manager for external access.
+func (d *Daemon) SSHKeys() *SSHKeyManager {
+	return d.sshkeys
 }
 
 // Agentd returns the agentd client for external access.

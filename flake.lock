@@ -20,6 +20,47 @@
         "type": "github"
       }
     },
+    "flake-parts": {
+      "inputs": {
+        "nixpkgs-lib": [
+          "skills",
+          "flake-skills",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1769996383,
+        "narHash": "sha256-AnYjnFWgS49RlqX7LrC4uA+sCCDBj0Ry/WOJ5XWAsa0=",
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "rev": "57928607ea566b5db3ad13af0e57e921e6b12381",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "type": "github"
+      }
+    },
+    "flake-skills": {
+      "inputs": {
+        "flake-parts": "flake-parts",
+        "nixpkgs": "nixpkgs_2"
+      },
+      "locked": {
+        "lastModified": 1772144141,
+        "narHash": "sha256-YZblb9N58JbAwsv8Uc75LBvw2JKs8Pb9qC4Eu42i5Kw=",
+        "owner": "papercomputeco",
+        "repo": "flake-skills",
+        "rev": "4085b2b7289e7789c549a2bd4f86a83517ddc662",
+        "type": "github"
+      },
+      "original": {
+        "owner": "papercomputeco",
+        "repo": "flake-skills",
+        "type": "github"
+      }
+    },
     "flake-utils": {
       "inputs": {
         "systems": "systems"
@@ -54,11 +95,49 @@
         "type": "github"
       }
     },
+    "nixpkgs_2": {
+      "locked": {
+        "lastModified": 1771848320,
+        "narHash": "sha256-0MAd+0mun3K/Ns8JATeHT1sX28faLII5hVLq0L3BdZU=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "dagger": "dagger",
         "flake-utils": "flake-utils",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "skills": "skills"
+      }
+    },
+    "skills": {
+      "inputs": {
+        "flake-skills": "flake-skills",
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1772144395,
+        "narHash": "sha256-VY/EkIEzWKeBsOwAB7UGezmhRMapJvCAdyD1xQ9E81w=",
+        "owner": "papercomputeco",
+        "repo": "skills",
+        "rev": "5b9009796dbcc920f6d91be5071ae6a544cdefb4",
+        "type": "github"
+      },
+      "original": {
+        "owner": "papercomputeco",
+        "repo": "skills",
+        "type": "github"
       }
     },
     "systems": {

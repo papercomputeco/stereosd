@@ -6,9 +6,12 @@
     flake-utils.url = "github:numtide/flake-utils";
     dagger.url = "github:dagger/nix";
     dagger.inputs.nixpkgs.follows = "nixpkgs";
+
+    skills.url = "github:papercomputeco/skills";
+    skills.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, flake-utils, dagger }:
+  outputs = { self, nixpkgs, flake-utils, dagger, skills }:
     {
       overlays.default = final: prev: {
         stereosd = final.buildGoModule {
@@ -79,6 +82,7 @@
           inherit system;
           overlays = [ self.overlays.default ];
         };
+        s = skills.lib;
       in
       {
         packages = {
@@ -101,7 +105,12 @@
             dagger.packages.${system}.dagger
           ];
 
-          shellHook = ''
+          shellHook =
+            (s.mkSkillsHook {
+              skills = [ "dagger-check" ];
+            })
+            +
+          ''
             echo "stereosd development environment"
             echo ""
             echo "Go version: $(go version)"

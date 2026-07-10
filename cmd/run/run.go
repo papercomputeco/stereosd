@@ -28,7 +28,10 @@ Examples:
 
 const runShortDesc string = "Start the stereosd daemon"
 
-var listenMode string
+var (
+	listenMode   string
+	poweroffMode string
+)
 
 // NewRunCmd creates the "run" subcommand.
 func NewRunCmd() *cobra.Command {
@@ -44,6 +47,8 @@ func NewRunCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&listenMode, "listen-mode", "auto",
 		`Control plane listener mode: "vsock", "tcp", or "auto" (try vsock, fall back to tcp)`)
+	cmd.Flags().StringVar(&poweroffMode, "poweroff", "systemctl",
+		`Shutdown power-off strategy: "systemctl" (systemd) or "signal-init" (SIGTERM PID 1, for capstan)`)
 
 	return cmd
 }
@@ -52,11 +57,16 @@ func runDaemon() error {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	log.Println("stereosd: starting StereOS daemon")
 
+	if err := stereosd.ValidatePoweroffMode(poweroffMode); err != nil {
+		return err
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	config := stereosd.DefaultConfig()
 	config.ListenMode = listenMode
+	config.PoweroffMode = poweroffMode
 
 	daemon := stereosd.NewDaemonWithConfig(config)
 	if err := daemon.Run(ctx); err != nil {

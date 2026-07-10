@@ -1518,7 +1518,7 @@ var _ = Describe("ShutdownCoordinator", func() {
 		lifecycle := NewLifecycleManager()
 		mounts := NewMountManager(cmd)
 
-		sc := NewShutdownCoordinator(mounts, lifecycle, cmd)
+		sc := NewShutdownCoordinator(mounts, lifecycle, cmd, PoweroffSystemctl)
 
 		ctx := context.Background()
 		err := sc.Execute(ctx, &ShutdownPayload{

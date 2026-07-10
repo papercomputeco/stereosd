@@ -86,6 +86,10 @@ type Config struct {
 
 	// Commander abstracts system commands. If nil, uses real exec.
 	Commander Commander
+
+	// PoweroffMode selects how shutdown powers the machine off:
+	// "systemctl" (default) or "signal-init" (SIGTERM PID 1, for capstan).
+	PoweroffMode string
 }
 
 // DefaultConfig returns the default daemon configuration.
@@ -97,6 +101,7 @@ func DefaultConfig() Config {
 		AgentdSocketPath: AgentdSocketPath,
 		PollInterval:     DefaultPollInterval,
 		RuntimeDirs:      DefaultRuntimeDirs(),
+		PoweroffMode:     PoweroffSystemctl,
 	}
 }
 
@@ -160,7 +165,7 @@ func NewDaemonWithConfig(config Config) *Daemon {
 	d.ipc.SetDaemon(d)
 
 	// Shutdown coordinator
-	d.shutdown = NewShutdownCoordinator(mounts, lifecycle, commander)
+	d.shutdown = NewShutdownCoordinator(mounts, lifecycle, commander, config.PoweroffMode)
 
 	return d
 }
